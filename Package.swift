@@ -9,6 +9,7 @@ let package = Package(
         .library(name: "Core", targets: ["Core"]),
         .executable(name: "CosmodromeApp", targets: ["CosmodromeApp"]),
         .executable(name: "CosmodromeHook", targets: ["CosmodromeHook"]),
+        .executable(name: "CosmodromeCLI", targets: ["CosmodromeCLI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
@@ -31,6 +32,12 @@ let package = Package(
             name: "CosmodromeHook",
             dependencies: [],
             path: "Sources/CosmodromeHook",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .executableTarget(
+            name: "CosmodromeCLI",
+            dependencies: [],
+            path: "Sources/CosmodromeCLI",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(

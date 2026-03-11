@@ -83,43 +83,45 @@ struct CommandPaletteView: View {
     var body: some View {
         if state.isVisible {
             ZStack(alignment: .top) {
-                // Tap-to-dismiss area (no dimming)
-                Color.black.opacity(0.15)
+                // Tap-to-dismiss area
+                DS.overlay
                     .contentShape(Rectangle())
                     .onTapGesture { state.dismiss() }
 
                 // Palette bar flush at top
                 VStack(spacing: 0) {
                     // Search field
-                    HStack(spacing: 10) {
+                    HStack(spacing: Spacing.md) {
                         Image(systemName: "magnifyingglass")
-                            .font(.system(size: 14))
-                            .foregroundColor(.gray)
-                        TextField("Type a command...", text: $state.query)
+                            .font(Typo.title)
+                            .foregroundColor(DS.textTertiary)
+                        TextField("Search commands, projects, sessions...", text: $state.query)
                             .textFieldStyle(.plain)
-                            .font(.system(size: 15))
-                            .foregroundColor(.white)
+                            .font(Typo.largeTitle)
+                            .foregroundColor(DS.textPrimary)
                             .onSubmit { state.confirm() }
                         if !state.query.isEmpty {
                             Button(action: { state.query = "" }) {
                                 Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.gray)
+                                    .font(Typo.callout)
+                                    .foregroundColor(DS.textTertiary)
                             }
                             .buttonStyle(.plain)
                         }
                         Text("esc")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(.gray.opacity(0.6))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(Color.white.opacity(0.06))
-                            .cornerRadius(3)
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundColor(DS.textTertiary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(
+                                RoundedRectangle(cornerRadius: Radius.sm)
+                                    .fill(DS.bgHover)
+                            )
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, Spacing.xl)
+                    .padding(.vertical, Spacing.md)
 
-                    Divider().opacity(0.3)
+                    Divider().opacity(0.2)
 
                     // Results
                     ScrollViewReader { proxy in
@@ -138,25 +140,54 @@ struct CommandPaletteView: View {
                                 }
                             }
                         }
-                        .frame(maxHeight: 320)
+                        .frame(maxHeight: 360)
                         .onChange(of: state.selectedIndex) { _, newIndex in
                             let items = state.filteredActions
                             if newIndex >= 0 && newIndex < items.count {
-                                proxy.scrollTo(items[newIndex].id)
+                                withAnimation(Anim.quick) {
+                                    proxy.scrollTo(items[newIndex].id, anchor: .center)
+                                }
                             }
                         }
                     }
+
+                    // Footer hint
+                    HStack(spacing: Spacing.lg) {
+                        keyHint("↑↓", label: "navigate")
+                        keyHint("↵", label: "select")
+                        keyHint("esc", label: "dismiss")
+                    }
+                    .padding(.horizontal, Spacing.xl)
+                    .padding(.vertical, Spacing.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(DS.bgSidebar.opacity(0.5))
                 }
-                .background(Color(white: 0.11))
+                .background(DS.bgElevated)
                 .clipShape(
                     UnevenRoundedRectangle(
-                        topLeadingRadius: 0, bottomLeadingRadius: 8,
-                        bottomTrailingRadius: 8, topTrailingRadius: 0
+                        topLeadingRadius: 0, bottomLeadingRadius: Radius.lg,
+                        bottomTrailingRadius: Radius.lg, topTrailingRadius: 0
                     )
                 )
-                .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
+                .shadow(color: DS.shadowHeavy, radius: 20, y: 8)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
+    @ViewBuilder
+    private func keyHint(_ key: String, label: String) -> some View {
+        HStack(spacing: Spacing.xs) {
+            Text(key)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundColor(DS.textTertiary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(RoundedRectangle(cornerRadius: 3).fill(DS.bgHover))
+            Text(label)
+                .font(Typo.footnote)
+                .foregroundColor(DS.textTertiary)
         }
     }
 }
@@ -165,22 +196,24 @@ private struct PaletteRow: View {
     let action: PaletteAction
     let isSelected: Bool
 
+    @State private var isHovered = false
+
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Spacing.md) {
             Image(systemName: action.icon)
-                .font(.system(size: 12))
-                .foregroundColor(isSelected ? .white.opacity(0.8) : .gray)
-                .frame(width: 18)
+                .font(Typo.callout)
+                .foregroundColor(isSelected ? DS.textPrimary : DS.textTertiary)
+                .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(action.title)
-                    .font(.system(size: 13))
-                    .foregroundColor(.white)
+                    .font(Typo.subheading)
+                    .foregroundColor(DS.textPrimary)
 
                 if let subtitle = action.subtitle {
                     Text(subtitle)
-                        .font(.system(size: 10))
-                        .foregroundColor(.gray)
+                        .font(Typo.footnote)
+                        .foregroundColor(DS.textTertiary)
                 }
             }
 
@@ -190,20 +223,27 @@ private struct PaletteRow: View {
                 togglePill(isOn: action.toggleState)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 7)
-        .background(isSelected ? Color.white.opacity(0.08) : Color.clear)
+        .padding(.horizontal, Spacing.xl)
+        .padding(.vertical, Spacing.sm)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.sm)
+                .fill(isSelected ? DS.bgSelected : (isHovered ? DS.bgHover : Color.clear))
+                .animation(Anim.quick, value: isSelected)
+                .animation(Anim.quick, value: isHovered)
+                .padding(.horizontal, Spacing.xs)
+        )
+        .onHover { isHovered = $0 }
     }
 
     @ViewBuilder
     private func togglePill(isOn: Bool) -> some View {
         Text(isOn ? "ON" : "OFF")
             .font(.system(size: 9, weight: .semibold, design: .monospaced))
-            .foregroundColor(isOn ? .white : .gray)
-            .padding(.horizontal, 7)
+            .foregroundColor(isOn ? DS.textPrimary : DS.textTertiary)
+            .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(
-                Capsule().fill(isOn ? Color.accentColor.opacity(0.5) : Color.white.opacity(0.08))
+                Capsule().fill(isOn ? DS.accentSubtle : DS.bgHover)
             )
     }
 }

@@ -10,9 +10,14 @@ public final class SwiftTermBackend: TerminalBackend {
     private let _lock = NSLock()
 
     private var hasData = false
+    private var _scrollOffset: Int = 0
+    private var _bottomPosition: Int = 0
     private let _commandTracker = CommandTracker()
 
     public var commandTracker: CommandTracker? { _commandTracker }
+
+    /// Called when an OSC 777 notification is received.
+    public var onNotification: ((TerminalNotification) -> Void)?
 
     public init(cols: Int, rows: Int, scrollback: Int = 10_000) {
         self.delegate = SwiftTermDelegate()
@@ -29,6 +34,20 @@ public final class SwiftTermBackend: TerminalBackend {
                 tracker.handleOsc133(str)
             }
         }
+
+        // Register OSC 777 handler for terminal notifications
+        // Format: 777;notify;title;body
+        terminal.registerOscHandler(code: 777) { [weak self] (data: ArraySlice<UInt8>) in
+            guard let str = String(bytes: data, encoding: .utf8) else { return }
+            // The OSC code (777) is already stripped by SwiftTerm's handler dispatch.
+            // Remaining payload: "notify;title;body"
+            let parts = str.split(separator: ";", maxSplits: 2)
+            guard parts.count >= 2, parts[0] == "notify" else { return }
+            let title = String(parts[1])
+            let body = parts.count >= 3 ? String(parts[2]) : ""
+            let notification = TerminalNotification(title: title, body: body)
+            self?.onNotification?(notification)
+        }
     }
 
     public func process(_ bytes: UnsafeRawBufferPointer) {
@@ -38,9 +57,19 @@ public final class SwiftTermBackend: TerminalBackend {
             count: bytes.count
         ))
         _lock.lock()
+        // Reset yDisp to bottom before feeding so SwiftTerm operates on consistent state
+        if _scrollOffset > 0 {
+            terminal.buffer.yDisp = _bottomPosition
+        }
         terminal.feed(byteArray: array)
+        // After feed(), yDisp == yBase (bottom). Capture it.
+        _bottomPosition = terminal.buffer.yDisp
+        // Re-apply scroll offset so the renderer sees scrolled-back content
+        if _scrollOffset > 0 {
+            _scrollOffset = min(_scrollOffset, _bottomPosition)
+            terminal.buffer.yDisp = max(0, _bottomPosition - _scrollOffset)
+        }
         hasData = true
-        // Mark all rows dirty for now; optimize with delegate tracking later
         allDirty = true
         _dirtyRows = IndexSet(integersIn: 0..<terminal.rows)
         _lock.unlock()
@@ -90,6 +119,8 @@ public final class SwiftTermBackend: TerminalBackend {
     public func resize(cols: UInt16, rows: UInt16) {
         _lock.lock()
         terminal.resize(cols: Int(cols), rows: Int(rows))
+        _scrollOffset = 0
+        _bottomPosition = terminal.buffer.yDisp
         allDirty = true
         _dirtyRows = IndexSet(integersIn: 0..<Int(rows))
         _lock.unlock()
@@ -120,7 +151,33 @@ public final class SwiftTermBackend: TerminalBackend {
     }
 
     public var scrollbackCount: Int {
-        terminal.buffer.yDisp
+        _bottomPosition
+    }
+
+    public func scroll(lines: Int) {
+        _lock.lock()
+        _scrollOffset = max(0, min(_scrollOffset + lines, _bottomPosition))
+        terminal.buffer.yDisp = max(0, _bottomPosition - _scrollOffset)
+        allDirty = true
+        _dirtyRows = IndexSet(integersIn: 0..<terminal.rows)
+        _lock.unlock()
+    }
+
+    public func scrollToBottom() {
+        _lock.lock()
+        guard _scrollOffset > 0 else {
+            _lock.unlock()
+            return
+        }
+        _scrollOffset = 0
+        terminal.buffer.yDisp = _bottomPosition
+        allDirty = true
+        _dirtyRows = IndexSet(integersIn: 0..<terminal.rows)
+        _lock.unlock()
+    }
+
+    public var isScrolledBack: Bool {
+        _scrollOffset > 0
     }
 
     public func pendingSendData() -> Data? {

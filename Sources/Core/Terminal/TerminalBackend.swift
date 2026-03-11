@@ -51,6 +51,15 @@ public protocol TerminalBackend: AnyObject {
 
     /// Cursor shape: block, bar, or underline.
     var cursorStyle: TerminalCursorStyle { get }
+
+    /// Scroll the viewport. Positive = up (into history), negative = down.
+    func scroll(lines: Int)
+
+    /// Snap the viewport to the bottom (latest output).
+    func scrollToBottom()
+
+    /// Whether the viewport is scrolled back from the latest output.
+    var isScrolledBack: Bool { get }
 }
 
 /// Cursor styles supported by the renderer.
@@ -64,4 +73,7 @@ extension TerminalBackend {
     public var commandTracker: CommandTracker? { nil }
     public var isCursorVisible: Bool { true }
     public var cursorStyle: TerminalCursorStyle { .block }
+    public func scroll(lines: Int) {}
+    public func scrollToBottom() {}
+    public var isScrolledBack: Bool { false }
 }

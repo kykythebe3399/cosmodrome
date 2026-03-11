@@ -39,6 +39,29 @@ enum AgentNotifications {
         UNUserNotificationCenter.current().add(request)
     }
 
+    static func notifyTerminal(project: Project, session: Session, notification: TerminalNotification) {
+        guard isAvailable else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = notification.title.isEmpty
+            ? "\(project.name) — \(session.name)"
+            : notification.title
+        content.body = notification.body
+        content.interruptionLevel = .active
+        content.userInfo = [
+            "projectId": project.id.uuidString,
+            "sessionId": session.id.uuidString,
+        ]
+
+        let request = UNNotificationRequest(
+            identifier: "osc777-\(session.id.uuidString)-\(Date().timeIntervalSince1970)",
+            content: content,
+            trigger: nil
+        )
+
+        UNUserNotificationCenter.current().add(request)
+    }
+
     static func clearNotification(for session: Session) {
         guard isAvailable else { return }
         UNUserNotificationCenter.current().removeDeliveredNotifications(

@@ -13,29 +13,30 @@ struct ActivityLogView: View {
             // Header
             HStack {
                 Text("Activity Log")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.white)
+                    .font(Typo.subheadingMedium)
+                    .foregroundColor(DS.textPrimary)
 
                 Spacer()
 
                 Text(projectName)
-                    .font(.system(size: 11))
-                    .foregroundColor(.gray)
+                    .font(Typo.body)
+                    .foregroundColor(DS.textTertiary)
 
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.gray)
+                        .foregroundColor(DS.textTertiary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(4)
+                .hoverHighlight()
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(nsColor: NSColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 1.0)))
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.sm)
+            .background(DS.bgElevated)
 
-            Divider()
-                .background(Color.white.opacity(0.1))
+            Divider().opacity(0.2)
 
             // Event list
             ScrollViewReader { proxy in
@@ -47,51 +48,63 @@ struct ActivityLogView: View {
                                 .id(idx)
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, Spacing.xs)
                 }
             }
         }
-        .background(Color(nsColor: NSColor(red: 0.1, green: 0.1, blue: 0.12, alpha: 1.0)))
+        .background(DS.bgPrimary)
     }
 }
 
 private struct ActivityEventRow: View {
     let event: ActivityEvent
 
+    @State private var isHovered = false
+
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: Spacing.sm) {
             // Timestamp
-            Text(timeString)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(.gray)
-                .frame(width: 40, alignment: .trailing)
+            Text(relativeTimeString)
+                .font(Typo.footnoteMono)
+                .foregroundColor(DS.textTertiary)
+                .frame(width: 44, alignment: .trailing)
 
             // Icon
             Image(systemName: iconName)
-                .font(.system(size: 9))
+                .font(Typo.footnote)
                 .foregroundColor(iconColor)
-                .frame(width: 14)
+                .frame(width: 16)
 
             // Session name
             Text(event.sessionName)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.white.opacity(0.6))
+                .font(Typo.footnoteMedium)
+                .foregroundColor(DS.textSecondary)
                 .frame(width: 70, alignment: .leading)
                 .lineLimit(1)
 
             // Description
             Text(description)
-                .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.85))
+                .font(Typo.body)
+                .foregroundColor(DS.textPrimary.opacity(0.85))
                 .lineLimit(2)
 
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 3)
+        .padding(.horizontal, Spacing.md)
+        .padding(.vertical, Spacing.xs)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.sm)
+                .fill(isHovered ? DS.bgHover : Color.clear)
+                .animation(Anim.quick, value: isHovered)
+        )
+        .onHover { isHovered = $0 }
     }
 
-    private var timeString: String {
+    private var relativeTimeString: String {
+        let elapsed = -event.timestamp.timeIntervalSinceNow
+        if elapsed < 60 { return "\(Int(elapsed))s" }
+        if elapsed < 3600 { return "\(Int(elapsed / 60))m" }
+        if elapsed < 86400 { return "\(Int(elapsed / 3600))h" }
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
         return formatter.string(from: event.timestamp)
@@ -115,14 +128,14 @@ private struct ActivityEventRow: View {
 
     private var iconColor: Color {
         switch event.kind {
-        case .taskStarted: return .green
-        case .taskCompleted: return .green
+        case .taskStarted: return DS.stateWorking
+        case .taskCompleted: return DS.stateWorking
         case .fileRead: return .blue
         case .fileWrite: return .orange
         case .commandRun: return .cyan
-        case .error: return .red
+        case .error: return DS.stateError
         case .modelChanged: return .purple
-        case .stateChanged: return .gray
+        case .stateChanged: return DS.textTertiary
         case .subagentStarted: return .teal
         case .subagentCompleted: return .teal
         case .commandCompleted: return .mint

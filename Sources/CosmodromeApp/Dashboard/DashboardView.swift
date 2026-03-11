@@ -32,32 +32,32 @@ struct DashboardView: View {
                 Image(systemName: "rocket.fill")
                     .foregroundColor(.orange)
                 Text("Cosmodrome")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.white)
+                    .font(Typo.title)
+                    .foregroundColor(DS.textPrimary)
                 Spacer()
                 if let count = ghosttyStatus {
                     Text(count)
-                        .font(.system(size: 11))
-                        .foregroundColor(.gray)
+                        .font(Typo.body)
+                        .foregroundColor(DS.textTertiary)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.horizontal, Spacing.lg)
+            .padding(.vertical, Spacing.md)
 
-            Divider()
+            Divider().opacity(0.3)
 
             if registry.projects.isEmpty {
-                VStack(spacing: 12) {
+                VStack(spacing: Spacing.md) {
                     Spacer()
                     Image(systemName: "rectangle.3.group")
                         .font(.system(size: 40))
-                        .foregroundColor(.gray.opacity(0.5))
+                        .foregroundColor(DS.textTertiary)
                     Text("No sessions detected")
-                        .font(.system(size: 13))
-                        .foregroundColor(.gray)
+                        .font(Typo.subheading)
+                        .foregroundColor(DS.textSecondary)
                     Text("Open Ghostty and source the\nshell integration script")
-                        .font(.system(size: 11))
-                        .foregroundColor(.gray.opacity(0.7))
+                        .font(Typo.body)
+                        .foregroundColor(DS.textTertiary)
                         .multilineTextAlignment(.center)
                     Spacer()
                 }
@@ -74,12 +74,12 @@ struct DashboardView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.top, 6)
+                    .padding(.horizontal, Spacing.sm)
+                    .padding(.top, Spacing.sm)
                 }
             }
         }
-        .background(Color(nsColor: NSColor(red: 0.08, green: 0.08, blue: 0.1, alpha: 1.0)))
+        .background(DS.bgSidebar)
     }
 
     // MARK: - Session Grid
@@ -93,26 +93,26 @@ struct DashboardView: View {
                         .fill(Color(hex: project.color) ?? .blue)
                         .frame(width: 10, height: 10)
                     Text(project.name)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
+                        .font(Typo.largeTitle)
+                        .foregroundColor(DS.textPrimary)
                     Text(project.rootPath)
-                        .font(.system(size: 11))
-                        .foregroundColor(.gray)
+                        .font(Typo.body)
+                        .foregroundColor(DS.textTertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
                     Text("\(project.sessions.count) session\(project.sessions.count == 1 ? "" : "s")")
-                        .font(.system(size: 11))
-                        .foregroundColor(.gray)
+                        .font(Typo.body)
+                        .foregroundColor(DS.textTertiary)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+                .padding(.horizontal, Spacing.lg)
+                .padding(.vertical, Spacing.md)
 
-                Divider()
+                Divider().opacity(0.3)
 
                 // Sessions
                 ScrollView {
-                    LazyVStack(spacing: 8) {
+                    LazyVStack(spacing: Spacing.sm) {
                         ForEach(project.sessions, id: \.id) { session in
                             DashboardSessionCard(
                                 session: session,
@@ -124,20 +124,20 @@ struct DashboardView: View {
                             }
                         }
                     }
-                    .padding(16)
+                    .padding(Spacing.lg)
                 }
             } else {
                 VStack {
                     Spacer()
                     Text("Select a project")
-                        .font(.system(size: 14))
-                        .foregroundColor(.gray)
+                        .font(Typo.subheading)
+                        .foregroundColor(DS.textTertiary)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
             }
         }
-        .background(Color(nsColor: NSColor(red: 0.11, green: 0.11, blue: 0.13, alpha: 1.0)))
+        .background(DS.bgPrimary)
     }
 
     // MARK: - Helpers
@@ -172,10 +172,11 @@ private struct DashboardProjectRow: View {
 
     @State private var isEditing = false
     @State private var editName = ""
+    @State private var isHovered = false
     @FocusState private var isNameFocused: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Spacing.sm) {
             Circle()
                 .fill(Color(hex: project.color) ?? .blue)
                 .frame(width: 8, height: 8)
@@ -188,27 +189,27 @@ private struct DashboardProjectRow: View {
                     isEditing = false
                 })
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundColor(.white)
+                .font(Typo.subheading)
+                .foregroundColor(DS.textPrimary)
                 .focused($isNameFocused)
                 .onAppear { isNameFocused = true }
                 .onExitCommand { isEditing = false }
             } else {
                 Text(project.name)
-                    .font(.system(size: 13))
-                    .foregroundColor(isSelected ? .white : .gray)
+                    .font(Typo.subheading)
+                    .foregroundColor(isSelected ? DS.textPrimary : DS.textSecondary)
                     .lineLimit(1)
             }
 
             Spacer()
 
             Text("\(project.sessions.count)")
-                .font(.system(size: 11))
-                .foregroundColor(.gray)
+                .font(Typo.body)
+                .foregroundColor(DS.textTertiary)
 
             if project.aggregateState != .inactive {
                 Circle()
-                    .fill(stateColor(project.aggregateState))
+                    .fill(DS.stateColor(for: project.aggregateState))
                     .frame(width: 6, height: 6)
             }
 
@@ -218,31 +219,25 @@ private struct DashboardProjectRow: View {
                     .foregroundColor(.white)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
-                    .background(Capsule().fill(.red))
+                    .background(Capsule().fill(DS.stateError))
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, Spacing.sm)
         .background(
-            RoundedRectangle(cornerRadius: 4)
-                .fill(isSelected ? Color.white.opacity(0.1) : Color.clear)
+            RoundedRectangle(cornerRadius: Radius.md)
+                .fill(isSelected ? DS.bgSelected : (isHovered ? DS.bgHover : Color.clear))
+                .animation(Anim.quick, value: isSelected)
+                .animation(Anim.quick, value: isHovered)
         )
         .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
         .onTapGesture(count: 2) {
             editName = project.name
             isEditing = true
         }
         .onTapGesture(count: 1) {
             if !isEditing { onSelect() }
-        }
-    }
-
-    private func stateColor(_ state: AgentState) -> Color {
-        switch state {
-        case .working: return .green
-        case .needsInput: return .yellow
-        case .error: return .red
-        case .inactive: return .gray
         }
     }
 }
@@ -255,17 +250,17 @@ private struct DashboardSessionCard: View {
     var onFocus: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Spacing.md) {
             // Agent state indicator
             VStack {
                 if session.isAgent {
                     Image(systemName: "cpu")
                         .font(.system(size: 16))
-                        .foregroundColor(stateColor(session.agentState))
+                        .foregroundColor(DS.stateColor(for: session.agentState))
                 } else {
                     Image(systemName: "terminal")
                         .font(.system(size: 16))
-                        .foregroundColor(.gray)
+                        .foregroundColor(DS.textTertiary)
                 }
             }
             .frame(width: 32)
@@ -274,48 +269,48 @@ private struct DashboardSessionCard: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
                     Text(session.label)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.white)
+                        .font(Typo.subheadingMedium)
+                        .foregroundColor(DS.textPrimary)
 
                     if session.isAgent, let type = session.agentType {
                         Text(type)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(.white.opacity(0.7))
-                            .padding(.horizontal, 6)
+                            .font(Typo.footnoteMedium)
+                            .foregroundColor(DS.textPrimary.opacity(0.8))
+                            .padding(.horizontal, Spacing.sm)
                             .padding(.vertical, 1)
                             .background(
-                                Capsule().fill(stateColor(session.agentState).opacity(0.3))
+                                Capsule().fill(DS.stateColor(for: session.agentState).opacity(0.2))
                             )
                     }
 
                     if session.isAgent, let model = session.agentModel {
                         Text(model)
-                            .font(.system(size: 10))
-                            .foregroundColor(.gray)
+                            .font(Typo.footnote)
+                            .foregroundColor(DS.textTertiary)
                     }
                 }
 
                 Text(session.cwd)
-                    .font(.system(size: 11))
-                    .foregroundColor(.gray)
+                    .font(Typo.body)
+                    .foregroundColor(DS.textTertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                HStack(spacing: 6) {
+                HStack(spacing: Spacing.sm) {
                     Text("PID \(session.pid)")
-                        .font(.system(size: 10))
-                        .foregroundColor(.gray.opacity(0.6))
+                        .font(Typo.footnote)
+                        .foregroundColor(DS.textTertiary)
 
                     if session.isAgent {
                         Text(stateLabel(session.agentState))
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(stateColor(session.agentState))
+                            .font(Typo.footnoteMedium)
+                            .foregroundColor(DS.stateColor(for: session.agentState))
                     }
 
                     if !session.isAlive {
                         Text("disconnected")
-                            .font(.system(size: 10))
-                            .foregroundColor(.red.opacity(0.7))
+                            .font(Typo.footnote)
+                            .foregroundColor(DS.stateError.opacity(0.8))
                     }
                 }
             }
@@ -324,44 +319,36 @@ private struct DashboardSessionCard: View {
 
             // Focus button
             Button(action: onFocus) {
-                HStack(spacing: 4) {
+                HStack(spacing: Spacing.xs) {
                     Image(systemName: "arrow.up.forward.app")
                     Text("Focus")
                 }
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .font(Typo.bodyMedium)
+                .foregroundColor(DS.textPrimary)
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, Spacing.xs + 1)
                 .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.accentColor.opacity(isHovered ? 0.8 : 0.5))
+                    RoundedRectangle(cornerRadius: Radius.md)
+                        .fill(DS.accent.opacity(isHovered ? 0.7 : 0.4))
                 )
             }
             .buttonStyle(.plain)
         }
-        .padding(12)
+        .padding(Spacing.md)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(isHovered ? 0.08 : 0.04))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(
-                            session.agentState == .needsInput ? Color.yellow.opacity(0.4) :
-                            session.agentState == .error ? Color.red.opacity(0.4) :
-                            Color.white.opacity(0.06),
-                            lineWidth: 1
-                        )
+            RoundedRectangle(cornerRadius: Radius.lg)
+                .fill(isHovered ? DS.bgHover : DS.borderSubtle)
+                .animation(Anim.quick, value: isHovered)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.lg)
+                .stroke(
+                    session.agentState == .needsInput ? DS.stateNeedsInput.opacity(0.35) :
+                    session.agentState == .error ? DS.stateError.opacity(0.35) :
+                    DS.borderSubtle,
+                    lineWidth: 1
                 )
         )
-    }
-
-    private func stateColor(_ state: AgentState) -> Color {
-        switch state {
-        case .working: return .green
-        case .needsInput: return .yellow
-        case .error: return .red
-        case .inactive: return .gray
-        }
     }
 
     private func stateLabel(_ state: AgentState) -> String {

@@ -10,6 +10,13 @@ final class TerminalContentView: NSView {
     private let layoutEngine = LayoutEngine()
     private var cachedEntries: [LayoutEngine.LayoutEntry] = []
 
+    // Session border/label overlays
+    private var sessionBorderLayers: [UUID: CALayer] = [:]
+    private var sessionLabelLayers: [UUID: CATextLayer] = [:]
+    private var sessionAttentionLayers: [UUID: CALayer] = [:]
+    private var hoveredSessionId: UUID?
+    private var sessionTrackingArea: NSTrackingArea?
+
     // Current session state
     var sessions: [(session: Session, backend: TerminalBackend)] = [] {
         didSet {
@@ -29,6 +36,7 @@ final class TerminalContentView: NSView {
         super.init(frame: frameRect)
 
         wantsLayer = true
+        layer?.masksToBounds = true
         metalView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(metalView)
 
@@ -47,6 +55,53 @@ final class TerminalContentView: NSView {
         DispatchQueue.main.async { [weak self] in
             self?.metalView.needsDisplay = true
         }
+
+        updateTrackingArea()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        updateTrackingArea()
+    }
+
+    private func updateTrackingArea() {
+        if let existing = sessionTrackingArea {
+            removeTrackingArea(existing)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        sessionTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let newHoveredId = layoutEngine.sessionAt(point: point, entries: cachedEntries)
+        if newHoveredId != hoveredSessionId {
+            hoveredSessionId = newHoveredId
+            updateLabelVisibility()
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if hoveredSessionId != nil {
+            hoveredSessionId = nil
+            updateLabelVisibility()
+        }
+    }
+
+    private func updateLabelVisibility() {
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.15)
+        for (id, labelLayer) in sessionLabelLayers {
+            let show = (id == hoveredSessionId || id == focusedSessionId)
+            labelLayer.opacity = show ? 1.0 : 0.0
+        }
+        CATransaction.commit()
     }
 
     @available(*, unavailable)
@@ -87,28 +142,48 @@ final class TerminalContentView: NSView {
 
         var renderEntries: [TerminalRenderer.SessionRenderEntry] = []
 
+        // Content padding: breathing room between view edges and terminal text (points).
+        // Gives a polished look and prevents text from touching borders.
+        let contentPadding: CGFloat = sessions.count > 1 ? 6 : 8
+
         for entry in cachedEntries {
             guard let pair = sessions.first(where: { $0.session.id == entry.sessionId }) else { continue }
             let backend = pair.backend
 
-            // cellW/cellH are in pixels (font scaled by backingScaleFactor)
+            // Inset the rendering area for padding
+            let insetFrame = entry.frame.insetBy(dx: contentPadding, dy: contentPadding)
+
+            // cellW/cellH are in scaled font units (font created at size * backingScaleFactor)
             let cellW = renderer.fontManager.cellMetrics.width
             let cellH = renderer.fontManager.cellMetrics.height
-            let frameCols = max(1, Int(entry.frame.width * scale / cellW))
-            let frameRows = max(1, Int(entry.frame.height * scale / cellH))
+            let frameCols = max(1, Int(insetFrame.width * scale / cellW))
+            let frameRows = max(1, Int(insetFrame.height * scale / cellH))
 
             if backend.cols != frameCols || backend.rows != frameRows {
                 backend.resize(cols: UInt16(frameCols), rows: UInt16(frameRows))
                 if pair.session.ptyFD >= 0 {
-                    resizePTY(fd: pair.session.ptyFD, cols: UInt16(frameCols), rows: UInt16(frameRows))
+                    let gridW = CGFloat(frameCols) * cellW
+                    let gridH = CGFloat(frameRows) * cellH
+                    resizePTY(fd: pair.session.ptyFD, cols: UInt16(frameCols), rows: UInt16(frameRows),
+                              pixelWidth: UInt16(gridW), pixelHeight: UInt16(gridH))
                 }
             }
 
-            // Pixel coordinates for Metal (Y-flipped)
-            let pixelX = entry.frame.origin.x * scale
-            let pixelY = (bounds.height - entry.frame.origin.y - entry.frame.height) * scale
-            let pixelW = entry.frame.width * scale
-            let pixelH = entry.frame.height * scale
+            // Center the terminal grid within the inset frame.
+            // The grid may not perfectly fill the available space (cols*cellW < available width),
+            // so we distribute the remainder evenly to center the content.
+            let gridPixelW = CGFloat(frameCols) * cellW
+            let gridPixelH = CGFloat(frameRows) * cellH
+            let availW = insetFrame.width * scale
+            let availH = insetFrame.height * scale
+            let padX = floor((availW - gridPixelW) / 2)
+            let padY = floor((availH - gridPixelH) / 2)
+
+            // Pixel coordinates for Metal (Y-flipped), centered within inset frame
+            let pixelX = insetFrame.origin.x * scale + padX
+            let pixelY = (bounds.height - insetFrame.origin.y - insetFrame.height) * scale + padY
+            let pixelW = gridPixelW
+            let pixelH = gridPixelH
 
             let viewport = MTLViewport(
                 originX: Double(pixelX),
@@ -135,6 +210,157 @@ final class TerminalContentView: NSView {
         renderer.visibleSessions = renderEntries
         renderer.selection = selection
         metalView.needsDisplay = true
+        updateSessionOverlays()
+    }
+
+    /// Draw thin borders and labels over each session viewport for visual separation.
+    private func updateSessionOverlays() {
+        guard let layer else { return }
+
+        let activeIds = Set(cachedEntries.map(\.sessionId))
+
+        // Remove stale overlays
+        for (id, borderLayer) in sessionBorderLayers where !activeIds.contains(id) {
+            borderLayer.removeFromSuperlayer()
+            sessionBorderLayers.removeValue(forKey: id)
+        }
+        for (id, labelLayer) in sessionLabelLayers where !activeIds.contains(id) {
+            labelLayer.removeFromSuperlayer()
+            sessionLabelLayers.removeValue(forKey: id)
+        }
+        for (id, attLayer) in sessionAttentionLayers where !activeIds.contains(id) {
+            attLayer.removeFromSuperlayer()
+            sessionAttentionLayers.removeValue(forKey: id)
+        }
+
+        let showOverlays = sessions.count > 1
+
+        for entry in cachedEntries {
+            let isFocused = entry.sessionId == focusedSessionId
+            let session = sessions.first { $0.session.id == entry.sessionId }?.session
+
+            // Border layer
+            let borderLayer: CALayer
+            if let existing = sessionBorderLayers[entry.sessionId] {
+                borderLayer = existing
+            } else {
+                borderLayer = CALayer()
+                borderLayer.zPosition = 10
+                layer.addSublayer(borderLayer)
+                sessionBorderLayers[entry.sessionId] = borderLayer
+            }
+
+            // NSView uses bottom-left origin, same as layout entries
+            let borderInset: CGFloat = 2
+            let borderFrame = entry.frame.insetBy(dx: borderInset, dy: borderInset)
+
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.15)
+            borderLayer.frame = borderFrame
+            borderLayer.cornerRadius = 5
+
+            if showOverlays {
+                let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                if isFocused {
+                    borderLayer.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.50).cgColor
+                    borderLayer.borderWidth = 1.5
+                    borderLayer.backgroundColor = nil
+                } else {
+                    let subtleBorder = isDark
+                        ? NSColor.white.withAlphaComponent(0.06)
+                        : NSColor.black.withAlphaComponent(0.06)
+                    borderLayer.borderColor = subtleBorder.cgColor
+                    borderLayer.borderWidth = 0.5
+                    borderLayer.backgroundColor = nil
+                }
+            } else {
+                borderLayer.borderWidth = 0
+                borderLayer.backgroundColor = nil
+            }
+            CATransaction.commit()
+
+            // Attention ring for sessions with unread notifications
+            let hasNotification = session?.hasUnreadNotification ?? false
+            if hasNotification {
+                let attLayer: CALayer
+                if let existing = sessionAttentionLayers[entry.sessionId] {
+                    attLayer = existing
+                } else {
+                    attLayer = CALayer()
+                    attLayer.zPosition = 9
+                    layer.addSublayer(attLayer)
+                    sessionAttentionLayers[entry.sessionId] = attLayer
+
+                    // Pulsing border animation
+                    let pulse = CABasicAnimation(keyPath: "borderColor")
+                    pulse.fromValue = NSColor(calibratedRed: 1.0, green: 0.82, blue: 0.28, alpha: 0.8).cgColor
+                    pulse.toValue = NSColor(calibratedRed: 1.0, green: 0.82, blue: 0.28, alpha: 0.2).cgColor
+                    pulse.duration = 1.0
+                    pulse.autoreverses = true
+                    pulse.repeatCount = .infinity
+                    attLayer.add(pulse, forKey: "attentionPulse")
+                }
+                attLayer.frame = borderFrame
+                attLayer.cornerRadius = 4
+                attLayer.borderWidth = 2
+                attLayer.borderColor = NSColor(calibratedRed: 1.0, green: 0.82, blue: 0.28, alpha: 0.6).cgColor
+                attLayer.isHidden = false
+            } else {
+                sessionAttentionLayers[entry.sessionId]?.isHidden = true
+            }
+
+            // Label layer (session name in top-left corner)
+            guard showOverlays, let session else {
+                sessionLabelLayers[entry.sessionId]?.isHidden = true
+                continue
+            }
+
+            let labelLayer: CATextLayer
+            if let existing = sessionLabelLayers[entry.sessionId] {
+                labelLayer = existing
+                labelLayer.isHidden = false
+            } else {
+                labelLayer = CATextLayer()
+                labelLayer.zPosition = 11
+                labelLayer.contentsScale = window?.backingScaleFactor ?? 2.0
+                labelLayer.fontSize = 9
+                labelLayer.font = NSFont.systemFont(ofSize: 9, weight: .medium) as CTFont
+                labelLayer.cornerRadius = 3
+                labelLayer.alignmentMode = .left
+                layer.addSublayer(labelLayer)
+                sessionLabelLayers[entry.sessionId] = labelLayer
+            }
+
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.15)
+
+            let labelText = session.name
+            labelLayer.string = " \(labelText) "
+
+            let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            labelLayer.foregroundColor = isDark
+                ? NSColor.white.withAlphaComponent(0.75).cgColor
+                : NSColor.black.withAlphaComponent(0.75).cgColor
+            labelLayer.backgroundColor = isDark
+                ? NSColor.black.withAlphaComponent(0.55).cgColor
+                : NSColor.white.withAlphaComponent(0.75).cgColor
+
+            // Position at top-right of the session frame (NSView coords: top = maxY)
+            let labelW: CGFloat = CGFloat(labelText.count) * 6.0 + 12
+            let labelH: CGFloat = 16
+            labelLayer.frame = CGRect(
+                x: entry.frame.maxX - min(labelW, entry.frame.width - 8) - 4,
+                y: entry.frame.maxY - labelH - 4,
+                width: min(labelW, entry.frame.width - 8),
+                height: labelH
+            )
+
+            // Only visible on hover or when focused
+            let showLabel = (entry.sessionId == hoveredSessionId || isFocused)
+            labelLayer.opacity = showLabel ? 1.0 : 0.0
+
+            CATransaction.commit()
+        }
     }
 
     func toggleFocus() {
@@ -203,10 +429,8 @@ final class TerminalContentView: NSView {
                 )
             }
         } else {
-            // No mouse reporting — do NOT send arrow keys (that would
-            // cycle through shell/Claude Code history instead of scrolling).
-            // TODO: implement scrollback viewport offset for true scroll.
-            // For now, swallow the event so it doesn't leak to parent views.
+            // Normal scrollback: scroll the viewport through history
+            backend.scroll(lines: scrollUp ? lines : -lines)
         }
     }
 
@@ -278,6 +502,8 @@ final class TerminalContentView: NSView {
               let text = NSPasteboard.general.string(forType: .string),
               let data = text.data(using: .utf8) else { return }
 
+        pair.backend.scrollToBottom()
+
         // Bracket paste mode: wrap pasted text in escape sequences
         // so the terminal/shell knows it's pasted content
         var pasteData = Data()
@@ -299,22 +525,33 @@ final class TerminalContentView: NSView {
     private func cellAt(point: NSPoint) -> (row: Int, col: Int)? {
         guard let renderer,
               let focusedId = focusedSessionId,
-              let entry = cachedEntries.first(where: { $0.sessionId == focusedId }) else { return nil }
+              let entry = cachedEntries.first(where: { $0.sessionId == focusedId }),
+              let pair = sessions.first(where: { $0.session.id == focusedId }) else { return nil }
 
         let scale = window?.backingScaleFactor ?? 2.0
         let cellW = renderer.fontManager.cellMetrics.width
         let cellH = renderer.fontManager.cellMetrics.height
+        let backend = pair.backend
 
-        // Convert point to pixel coordinates relative to session origin
-        let pixelX = (point.x - entry.frame.origin.x) * scale
+        // Must match the padding/centering logic in updateLayout()
+        let contentPadding: CGFloat = sessions.count > 1 ? 6 : 8
+        let insetFrame = entry.frame.insetBy(dx: contentPadding, dy: contentPadding)
+        let gridPixelW = CGFloat(backend.cols) * cellW
+        let gridPixelH = CGFloat(backend.rows) * cellH
+        let padX = floor((insetFrame.width * scale - gridPixelW) / 2)
+        let padY = floor((insetFrame.height * scale - gridPixelH) / 2)
+
+        // Grid origin in NSView points
+        let gridOriginX = insetFrame.origin.x + padX / scale
+        let gridTopY = insetFrame.maxY - padY / scale
+
+        // Convert point to pixel coordinates relative to grid origin
+        let pixelX = (point.x - gridOriginX) * scale
         // NSView Y is bottom-up, cell grid Y is top-down
-        let pixelY = (entry.frame.maxY - point.y) * scale
+        let pixelY = (gridTopY - point.y) * scale
 
         let col = Int(pixelX / cellW)
         let row = Int(pixelY / cellH)
-
-        guard let pair = sessions.first(where: { $0.session.id == focusedId }) else { return nil }
-        let backend = pair.backend
 
         guard row >= 0 && row < backend.rows && col >= 0 && col < backend.cols else { return nil }
         return (row: row, col: col)

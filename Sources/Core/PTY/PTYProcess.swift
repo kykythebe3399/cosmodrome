@@ -44,6 +44,11 @@ public func spawnPTY(
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "Cosmodrome"
+        env["TERM_PROGRAM_VERSION"] = "1.0.0"
+        // Ensure proper UTF-8 locale for Unicode rendering
+        if env["LANG"] == nil && env["LC_ALL"] == nil {
+            env["LANG"] = "en_US.UTF-8"
+        }
         env.merge(environment) { _, new in new }
 
         for (k, v) in env {
@@ -73,12 +78,12 @@ public func spawnPTY(
 }
 
 /// Resize the PTY window.
-public func resizePTY(fd: Int32, cols: UInt16, rows: UInt16) {
+public func resizePTY(fd: Int32, cols: UInt16, rows: UInt16, pixelWidth: UInt16 = 0, pixelHeight: UInt16 = 0) {
     var winSize = winsize(
         ws_row: rows,
         ws_col: cols,
-        ws_xpixel: 0,
-        ws_ypixel: 0
+        ws_xpixel: pixelWidth,
+        ws_ypixel: pixelHeight
     )
     _ = ioctl(fd, TIOCSWINSZ, &winSize)
 }

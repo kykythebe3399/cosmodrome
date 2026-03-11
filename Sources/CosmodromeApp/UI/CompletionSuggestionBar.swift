@@ -14,16 +14,16 @@ struct CompletionSuggestionBar: View {
 
     var body: some View {
         if visible {
-            HStack(spacing: 12) {
+            HStack(spacing: Spacing.md) {
                 // Summary
-                HStack(spacing: 4) {
+                HStack(spacing: Spacing.xs) {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundColor(.green)
+                        .font(Typo.body)
+                        .foregroundColor(DS.stateWorking)
 
                     Text(summaryText)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.9))
+                        .font(Typo.bodyMedium)
+                        .foregroundColor(DS.textPrimary)
                 }
 
                 Spacer()
@@ -31,40 +31,57 @@ struct CompletionSuggestionBar: View {
                 // Action buttons
                 ForEach(actions, id: \.id) { action in
                     Button(action: { onAction(action.id) }) {
-                        HStack(spacing: 3) {
+                        HStack(spacing: Spacing.xs) {
                             Image(systemName: action.icon)
-                                .font(.system(size: 10))
+                                .font(Typo.footnote)
                             Text(action.label)
-                                .font(.system(size: 11))
+                                .font(Typo.body)
                         }
+                        .padding(.horizontal, Spacing.sm)
+                        .padding(.vertical, Spacing.xs)
+                        .background(
+                            RoundedRectangle(cornerRadius: Radius.sm)
+                                .fill(DS.bgHover)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Radius.sm)
+                                .stroke(DS.borderMedium, lineWidth: 0.5)
+                        )
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.plain)
+                    .foregroundColor(DS.textPrimary)
                 }
 
                 // Dismiss
                 Button(action: {
-                    withAnimation(.easeOut(duration: 0.2)) { visible = false }
+                    withAnimation(Anim.normal) { visible = false }
                     onDismiss()
                 }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(.gray)
+                        .foregroundColor(DS.textTertiary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(4)
+                .hoverHighlight()
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.sm)
             .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .padding(.horizontal, 8)
-            .padding(.bottom, 8)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.lg)
+                    .stroke(DS.borderSubtle, lineWidth: 0.5)
+            )
+            .shadow(color: DS.shadowLight, radius: 8, y: 2)
+            .padding(.horizontal, Spacing.sm)
+            .padding(.bottom, Spacing.sm)
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .onAppear {
                 // Auto-dismiss after 30 seconds
                 DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
-                    withAnimation(.easeOut(duration: 0.3)) { visible = false }
+                    withAnimation(Anim.slow) { visible = false }
                     onDismiss()
                 }
             }

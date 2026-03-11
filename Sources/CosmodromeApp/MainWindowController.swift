@@ -16,6 +16,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     private var mcpServer: MCPServer?
     private var mcpBridge: MCPBridge?
     private var hookServer: HookServer?
+    private var controlServer: ControlServer?
     private let modeIndicatorState = ModeIndicatorState()
     private var modeIndicatorHost: NSHostingView<ModeIndicatorView>?
     private var appearanceObserver: NSObjectProtocol?
@@ -33,7 +34,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         window.title = "Cosmodrome"
         window.center()
         window.minSize = NSSize(width: 800, height: 500)
-        window.backgroundColor = NSColor(red: 0.1, green: 0.1, blue: 0.12, alpha: 1.0)
+        window.backgroundColor = NSColor(red: 0.10, green: 0.10, blue: 0.12, alpha: 1.0)
         window.titlebarAppearsTransparent = true
 
         super.init(window: window)
@@ -44,8 +45,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         setupUI()
         setupMCP()
         setupHookServer()
+        setupControlServer()
         setupCompletionActions()
-        createDefaultProject()
+        setupTerminalNotifications()
+        restoreOrCreateDefaultProject()
         syncWithSystemAppearance()
         observeAppearanceChanges()
     }
@@ -228,6 +231,54 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         false // Never collapse either pane
     }
 
+    private func restoreOrCreateDefaultProject() {
+        if let state = StatePersistence.load(), !state.projects.isEmpty {
+            let (projects, activeId) = StatePersistence.restoreProjects(from: state)
+            for project in projects {
+                projectStore.addProject(project)
+                // Start all sessions and feed saved scrollback
+                for session in project.sessions {
+                    do {
+                        try sessionManager.startSession(session)
+                        // Feed saved scrollback into the backend
+                        if let scrollback = StatePersistence.loadScrollback(for: session.id),
+                           !scrollback.isEmpty,
+                           let backend = session.backend {
+                            // Feed scrollback as plain text so it appears in the terminal
+                            let text = scrollback + "\n"
+                            if let data = text.data(using: .utf8) {
+                                data.withUnsafeBytes { buf in
+                                    backend.process(buf)
+                                }
+                            }
+                        }
+                    } catch {
+                        FileHandle.standardError.write("[Cosmodrome] Failed to restore session '\(session.name)': \(error)\n".data(using: .utf8)!)
+                    }
+                }
+            }
+            if let activeId {
+                projectStore.setActiveProject(id: activeId)
+            }
+
+            // Restore window frame
+            if state.windowFrame.count == 4 {
+                let frame = NSRect(
+                    x: state.windowFrame[0],
+                    y: state.windowFrame[1],
+                    width: state.windowFrame[2],
+                    height: state.windowFrame[3]
+                )
+                window?.setFrame(frame, display: true)
+            }
+        } else {
+            createDefaultProject()
+        }
+
+        refreshTerminalView()
+        window?.makeFirstResponder(terminalContentView)
+    }
+
     private func createDefaultProject() {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
         let defaultSession = Session(
@@ -246,9 +297,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         } catch {
             FileHandle.standardError.write("[Cosmodrome] Failed to start default session: \(error)\n".data(using: .utf8)!)
         }
-
-        refreshTerminalView()
-        window?.makeFirstResponder(terminalContentView)
     }
 
     // MARK: - Session/Project Management
@@ -259,6 +307,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     }
 
     private func focusSession(_ id: UUID) {
+        // Clear unread notification when focusing
+        if let project = projectStore.activeProject,
+           let session = project.sessions.first(where: { $0.id == id }) {
+            session.hasUnreadNotification = false
+            AgentNotifications.clearNotification(for: session)
+        }
         terminalContentView.focusSession(id)
         projectStore.focusedSessionId = id
     }
@@ -463,7 +517,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         })
 
         // New session / project
-        actions.append(PaletteAction("Launch Claude Code", subtitle: "Cmd+Shift+C", icon: "cpu") { [weak self] in
+        actions.append(PaletteAction("Launch Claude Code", icon: "cpu") { [weak self] in
             if let project = self?.projectStore.activeProject {
                 self?.addClaudeSession(to: project)
             }
@@ -607,8 +661,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         window?.backgroundColor = NSColor(
             red: CGFloat(bg.r), green: CGFloat(bg.g), blue: CGFloat(bg.b), alpha: 1.0
         )
-        // Sync window chrome with theme
+        // Sync window chrome with theme — this triggers DS adaptive colors to re-resolve
         window?.appearance = NSAppearance(named: theme.name == "Light" ? .aqua : .darkAqua)
+        // Refresh CALayer overlays (they use resolved CGColors, not dynamic)
+        terminalContentView.updateLayout()
     }
 
     private func syncWithSystemAppearance() {
@@ -763,6 +819,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                let pair = terminalContentView.sessions.first(where: { $0.session.id == focusedId }),
                pair.session.ptyFD >= 0 {
                 if let data = encodeKeyForPTY(event) {
+                    pair.backend.scrollToBottom()
                     sessionManager.multiplexer.send(to: pair.session.ptyFD, data: data)
                     return true
                 }
@@ -788,11 +845,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
 
         case .newProject:
             addNewProject()
-
-        case .newClaudeSession:
-            if let project = projectStore.activeProject {
-                addClaudeSession(to: project)
-            }
 
         case .jumpNextNeedsInput:
             let current = terminalContentView.focusedSessionId
@@ -1091,6 +1143,224 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         }
 
         self.hookServer = server
+    }
+
+    // MARK: - Control Server
+
+    private func setupControlServer() {
+        let server = ControlServer()
+        server.onCommand = { [weak self] request in
+            guard let self else { return .failure("App not available") }
+            return self.handleControlCommand(request)
+        }
+        server.start()
+        self.controlServer = server
+    }
+
+    private func handleControlCommand(_ request: ControlRequest) -> ControlResponse {
+        // Commands execute on the control queue; dispatch to main for UI operations
+        switch request.command {
+        case "list-projects":
+            var result: [[String: Any]] = []
+            for project in projectStore.projects {
+                var p: [String: Any] = [
+                    "id": project.id.uuidString,
+                    "name": project.name,
+                    "sessions": project.sessions.count,
+                    "state": "\(project.aggregateState)",
+                ]
+                if let rootPath = project.rootPath { p["path"] = rootPath }
+                result.append(p)
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]),
+               let json = String(data: data, encoding: .utf8) {
+                return .success(json)
+            }
+            return .success("[]")
+
+        case "list-sessions":
+            let projectId = request.args?["project_id"]
+            let project: Project?
+            if let pid = projectId, let uuid = UUID(uuidString: pid) {
+                project = projectStore.projects.first { $0.id == uuid }
+            } else {
+                project = projectStore.activeProject
+            }
+            guard let project else { return .failure("Project not found") }
+
+            var result: [[String: Any]] = []
+            for session in project.sessions {
+                var s: [String: Any] = [
+                    "id": session.id.uuidString,
+                    "name": session.name,
+                    "command": session.command,
+                    "running": session.isRunning,
+                    "agent_state": "\(session.agentState)",
+                ]
+                if !session.detectedPorts.isEmpty {
+                    s["ports"] = session.detectedPorts.map { Int($0) }
+                }
+                result.append(s)
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]),
+               let json = String(data: data, encoding: .utf8) {
+                return .success(json)
+            }
+            return .success("[]")
+
+        case "focus":
+            guard let sessionIdStr = request.args?["session_id"],
+                  let sessionId = UUID(uuidString: sessionIdStr) else {
+                return .failure("Missing session_id")
+            }
+            DispatchQueue.main.sync {
+                for project in self.projectStore.projects {
+                    if project.sessions.contains(where: { $0.id == sessionId }) {
+                        self.jumpToSession(projectId: project.id, sessionId: sessionId)
+                        return
+                    }
+                }
+            }
+            return .success("focused")
+
+        case "send":
+            guard let sessionIdStr = request.args?["session_id"],
+                  let sessionId = UUID(uuidString: sessionIdStr),
+                  let text = request.args?["text"] else {
+                return .failure("Missing session_id or text")
+            }
+            let resolved = text.replacingOccurrences(of: "\\n", with: "\n")
+            if let data = resolved.data(using: .utf8) {
+                for project in projectStore.projects {
+                    if let session = project.sessions.first(where: { $0.id == sessionId }), session.ptyFD >= 0 {
+                        sessionManager.multiplexer.send(to: session.ptyFD, data: data)
+                        return .success("sent")
+                    }
+                }
+            }
+            return .failure("Session not found or not running")
+
+        case "new-session":
+            let projectIdStr = request.args?["project_id"]
+            let command = request.args?["command"] ?? "/bin/zsh"
+            let name = request.args?["name"] ?? "Shell"
+            let isAgent = request.args?["agent"] == "true"
+
+            var result = ""
+            DispatchQueue.main.sync {
+                let project: Project?
+                if let pidStr = projectIdStr, let pid = UUID(uuidString: pidStr) {
+                    project = self.projectStore.projects.first { $0.id == pid }
+                } else {
+                    project = self.projectStore.activeProject
+                }
+                guard let project else {
+                    result = "error:Project not found"
+                    return
+                }
+                let session = Session(
+                    name: name,
+                    command: command,
+                    cwd: project.rootPath ?? FileManager.default.homeDirectoryForCurrentUser.path,
+                    isAgent: isAgent,
+                    agentType: isAgent ? "claude" : nil
+                )
+                project.sessions.append(session)
+                do {
+                    try self.sessionManager.startSession(session)
+                    self.refreshTerminalView()
+                    self.focusSession(session.id)
+                    result = session.id.uuidString
+                } catch {
+                    result = "error:\(error)"
+                }
+            }
+            return result.hasPrefix("error:") ? .failure(String(result.dropFirst(6))) : .success(result)
+
+        case "status":
+            var info: [String: Any] = [
+                "projects": projectStore.projects.count,
+                "total_sessions": projectStore.projects.reduce(0) { $0 + $1.sessions.count },
+                "active_project": projectStore.activeProject?.name ?? "none",
+            ]
+            // Collect attention items
+            let attention = projectStore.sessionsNeedingAttention
+            if !attention.isEmpty {
+                info["attention"] = attention.map { "\($0.project.name)/\($0.session.name): \($0.session.agentState)" }
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys]),
+               let json = String(data: data, encoding: .utf8) {
+                return .success(json)
+            }
+            return .success("{}")
+
+        case "content":
+            guard let sessionIdStr = request.args?["session_id"],
+                  let sessionId = UUID(uuidString: sessionIdStr) else {
+                return .failure("Missing session_id")
+            }
+            for project in projectStore.projects {
+                if let session = project.sessions.first(where: { $0.id == sessionId }),
+                   let backend = session.backend {
+                    let lines = request.args?["lines"].flatMap { Int($0) }
+                    let content = extractContent(from: backend, lastN: lines)
+                    return .success(content)
+                }
+            }
+            return .failure("Session not found")
+
+        default:
+            return .failure("Unknown command: \(request.command). Available: list-projects, list-sessions, focus, send, new-session, status, content")
+        }
+    }
+
+    private func extractContent(from backend: TerminalBackend, lastN: Int? = nil) -> String {
+        backend.lock()
+        defer { backend.unlock() }
+
+        let totalRows = backend.rows
+        let startRow = lastN.map { max(0, totalRows - $0) } ?? 0
+        var lines: [String] = []
+
+        for row in startRow..<totalRows {
+            var line = ""
+            for col in 0..<backend.cols {
+                let cell = backend.cell(row: row, col: col)
+                let cp = cell.codepoint
+                if cp >= 32, let scalar = Unicode.Scalar(cp) {
+                    line.append(Character(scalar))
+                } else {
+                    line.append(" ")
+                }
+            }
+            while line.hasSuffix(" ") { line.removeLast() }
+            lines.append(line)
+        }
+
+        while lines.last?.isEmpty == true { lines.removeLast() }
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: - Terminal Notifications (OSC 777)
+
+    private func setupTerminalNotifications() {
+        sessionManager.onTerminalNotification = { [weak self] session, notification in
+            guard let self else { return }
+            // Don't notify for the currently focused session
+            if session.id == self.terminalContentView.focusedSessionId { return }
+
+            // Send macOS notification
+            if let project = self.sessionManager.findProject(for: session) {
+                AgentNotifications.notifyTerminal(
+                    project: project,
+                    session: session,
+                    notification: notification
+                )
+            }
+
+            // Trigger UI refresh for attention ring
+            self.terminalContentView.updateLayout()
+        }
     }
 
     // MARK: - State Persistence

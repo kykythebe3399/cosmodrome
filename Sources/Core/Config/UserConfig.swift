@@ -149,15 +149,77 @@ public struct AppState: Codable {
 
     public struct ProjectStateEntry: Codable {
         public var id: String
+        public var name: String?
+        public var color: String?
+        public var rootPath: String?
         public var configPath: String?
         public var layout: String?
         public var focusedSessionId: String?
+        public var sessions: [SessionStateEntry]?
 
-        public init(id: String, configPath: String? = nil, layout: String? = nil, focusedSessionId: String? = nil) {
+        public init(
+            id: String,
+            name: String? = nil,
+            color: String? = nil,
+            rootPath: String? = nil,
+            configPath: String? = nil,
+            layout: String? = nil,
+            focusedSessionId: String? = nil,
+            sessions: [SessionStateEntry]? = nil
+        ) {
             self.id = id
+            self.name = name
+            self.color = color
+            self.rootPath = rootPath
             self.configPath = configPath
             self.layout = layout
             self.focusedSessionId = focusedSessionId
+            self.sessions = sessions
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, color, layout, sessions
+            case rootPath = "root_path"
+            case configPath = "config_path"
+            case focusedSessionId = "focused_session_id"
+        }
+    }
+
+    public struct SessionStateEntry: Codable {
+        public var id: String
+        public var name: String
+        public var command: String
+        public var arguments: [String]?
+        public var cwd: String
+        public var isAgent: Bool?
+        public var agentType: String?
+        public var scrollbackFile: String?
+
+        public init(
+            id: String,
+            name: String,
+            command: String,
+            arguments: [String]? = nil,
+            cwd: String,
+            isAgent: Bool? = nil,
+            agentType: String? = nil,
+            scrollbackFile: String? = nil
+        ) {
+            self.id = id
+            self.name = name
+            self.command = command
+            self.arguments = arguments
+            self.cwd = cwd
+            self.isAgent = isAgent
+            self.agentType = agentType
+            self.scrollbackFile = scrollbackFile
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, command, arguments, cwd
+            case isAgent = "is_agent"
+            case agentType = "agent_type"
+            case scrollbackFile = "scrollback_file"
         }
     }
 }

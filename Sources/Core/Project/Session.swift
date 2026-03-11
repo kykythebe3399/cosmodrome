@@ -15,9 +15,12 @@ public final class Session: Identifiable {
     public var isAgent: Bool
     public var agentType: String?
 
-    // Runtime state (not persisted, updated from I/O thread)
-    @ObservationIgnored public var agentState: AgentState = .inactive
-    @ObservationIgnored public var agentModel: String?
+    // Runtime state (not persisted)
+    public var agentState: AgentState = .inactive
+    public var agentModel: String?
+    public var agentContext: String?     // e.g. "45k/200k"
+    public var agentMode: String?        // e.g. "Auto", "Plan"
+    public var agentCost: String?        // e.g. "$0.34"
     @ObservationIgnored public var backend: TerminalBackend?
     @ObservationIgnored public var ptyFD: Int32 = -1
     @ObservationIgnored public var pid: pid_t = 0
@@ -26,6 +29,9 @@ public final class Session: Identifiable {
     @ObservationIgnored public var restartAttempts: Int = 0
     @ObservationIgnored public var taskStartedAt: Date?
     @ObservationIgnored public var filesChangedInTask: [String] = []
+    @ObservationIgnored public var hasUnreadNotification: Bool = false
+    @ObservationIgnored public var lastNotification: TerminalNotification?
+    public var detectedPorts: [UInt16] = []
 
     public init(
         id: UUID = UUID(),

@@ -14,7 +14,7 @@ final class FontManager {
     let cellMetrics: CellMetrics
     let fontSize: CGFloat
 
-    init(family: String = "Menlo", size: CGFloat = 14, scale: CGFloat = 2.0, lineHeight: CGFloat = 1.2) {
+    init(family: String = "JetBrainsMono Nerd Font Mono", size: CGFloat = 13, scale: CGFloat = 2.0, lineHeight: CGFloat = 1.2) {
         self.fontSize = size
         let scaledSize = size * scale
         let regular = CTFontCreateWithName(family as CFString, scaledSize, nil)

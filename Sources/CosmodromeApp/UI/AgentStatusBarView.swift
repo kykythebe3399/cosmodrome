@@ -6,7 +6,7 @@ struct AgentStatusBarView: View {
     var onJumpToSession: (UUID, UUID) -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Spacing.md) {
             ForEach(agentEntries, id: \.sessionId) { entry in
                 AgentStatusEntry(
                     projectName: entry.projectName,
@@ -23,12 +23,12 @@ struct AgentStatusBarView: View {
 
             // Session count
             Text("\(totalSessionCount) sessions")
-                .font(.system(size: 11))
-                .foregroundColor(.gray)
+                .font(Typo.body)
+                .foregroundColor(DS.textTertiary)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Spacing.md)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: NSColor(red: 0.08, green: 0.08, blue: 0.1, alpha: 1.0)))
+        .background(DS.bgSidebar)
     }
 
     private struct AgentInfo: Identifiable {
@@ -69,23 +69,35 @@ private struct AgentStatusEntry: View {
     let state: AgentState
     let model: String?
 
+    @State private var isHovered = false
+
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Spacing.xs) {
             Circle()
                 .fill(stateColor)
                 .frame(width: 6, height: 6)
+                .shadow(color: stateColor.opacity(0.4), radius: 3)
 
             Text(statusText)
-                .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.8))
+                .font(Typo.body)
+                .foregroundColor(DS.textPrimary.opacity(0.85))
                 .lineLimit(1)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, Spacing.xs)
         .background(
             Capsule()
-                .fill(stateColor.opacity(0.15))
+                .fill(stateColor.opacity(isHovered ? 0.25 : 0.12))
+                .animation(Anim.quick, value: isHovered)
         )
+        .overlay(
+            Capsule()
+                .stroke(stateColor.opacity(isHovered ? 0.3 : 0), lineWidth: 1)
+                .animation(Anim.quick, value: isHovered)
+        )
+        .onHover { isHovered = $0 }
+        .help("\(projectName)/\(sessionName)")
+
     }
 
     private var statusText: String {
@@ -107,11 +119,6 @@ private struct AgentStatusEntry: View {
     }
 
     private var stateColor: Color {
-        switch state {
-        case .working: return .green
-        case .needsInput: return .yellow
-        case .error: return .red
-        case .inactive: return .gray
-        }
+        DS.stateColor(for: state)
     }
 }

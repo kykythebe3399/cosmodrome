@@ -228,6 +228,26 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
                     let cp = cell.codepoint
                     guard cp > 32 else { continue }
 
+                    // Block drawing characters (U+2580-U+259F): render procedurally
+                    // as exact-cell-sized rectangles instead of font glyphs. This ensures
+                    // block elements tile seamlessly (no gaps from font metrics mismatch).
+                    if cp >= 0x2580 && cp <= 0x259F {
+                        let rects = blockElementRects(cp, cellW: cellW, cellH: cellH)
+                        for rect in rects {
+                            let idx = bgBase + bgCount
+                            guard idx + 6 <= glyphBase else { break }
+                            addQuad(
+                                ptr: vertexPtr, at: idx,
+                                x: x + rect.x, y: y + rect.y,
+                                w: rect.w, h: rect.h,
+                                u0: 0, v0: 0, u1: 0, v1: 0,
+                                color: SIMD4(fgColor.x, fgColor.y, fgColor.z, fgColor.w * rect.alpha)
+                            )
+                            bgCount += 6
+                        }
+                        continue
+                    }
+
                     let variant = FontManager.variant(from: cell.attrs)
                     let key = GlyphAtlas.GlyphKey(codepoint: cp, fontVariant: variant)
                     let glyph = atlas.lookup(key)
@@ -250,8 +270,8 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
                 }
             }
 
-            // Cursor (only if visible)
-            if backend.isCursorVisible {
+            // Cursor (only if visible; hide when scrolled back since position is yBase-relative)
+            if backend.isCursorVisible && !backend.isScrolledBack {
                 let (cursorRow, cursorCol) = backend.cursorPosition()
                 let cursorX = offsetX + Float(cursorCol) * cellW
                 let cursorY = offsetY + Float(cursorRow) * cellH
@@ -351,6 +371,107 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
         p[3] = TerminalVertex(position: SIMD2(x + w, y), texCoord: SIMD2(u1, v0), color: color)
         p[4] = TerminalVertex(position: SIMD2(x + w, y + h), texCoord: SIMD2(u1, v1), color: color)
         p[5] = TerminalVertex(position: SIMD2(x, y + h), texCoord: SIMD2(u0, v1), color: color)
+    }
+
+    // MARK: - Block Element Rendering
+
+    private struct BlockRect {
+        let x: Float, y: Float, w: Float, h: Float
+        let alpha: Float
+    }
+
+    /// Return rectangles to draw for Unicode block element characters (U+2580-U+259F).
+    /// Coordinates are relative to the cell origin (0,0 = top-left in Metal coords).
+    private func blockElementRects(_ cp: UInt32, cellW: Float, cellH: Float) -> [BlockRect] {
+        let halfW = cellW * 0.5
+        let halfH = cellH * 0.5
+
+        switch cp {
+        case 0x2580: // ▀ Upper half
+            return [BlockRect(x: 0, y: 0, w: cellW, h: halfH, alpha: 1)]
+        case 0x2581: // ▁ Lower 1/8
+            return [BlockRect(x: 0, y: cellH * 7/8, w: cellW, h: cellH / 8, alpha: 1)]
+        case 0x2582: // ▂ Lower 1/4
+            return [BlockRect(x: 0, y: cellH * 3/4, w: cellW, h: cellH / 4, alpha: 1)]
+        case 0x2583: // ▃ Lower 3/8
+            return [BlockRect(x: 0, y: cellH * 5/8, w: cellW, h: cellH * 3/8, alpha: 1)]
+        case 0x2584: // ▄ Lower half
+            return [BlockRect(x: 0, y: halfH, w: cellW, h: halfH, alpha: 1)]
+        case 0x2585: // ▅ Lower 5/8
+            return [BlockRect(x: 0, y: cellH * 3/8, w: cellW, h: cellH * 5/8, alpha: 1)]
+        case 0x2586: // ▆ Lower 3/4
+            return [BlockRect(x: 0, y: cellH / 4, w: cellW, h: cellH * 3/4, alpha: 1)]
+        case 0x2587: // ▇ Lower 7/8
+            return [BlockRect(x: 0, y: cellH / 8, w: cellW, h: cellH * 7/8, alpha: 1)]
+        case 0x2588: // █ Full block
+            return [BlockRect(x: 0, y: 0, w: cellW, h: cellH, alpha: 1)]
+        case 0x2589: // ▉ Left 7/8
+            return [BlockRect(x: 0, y: 0, w: cellW * 7/8, h: cellH, alpha: 1)]
+        case 0x258A: // ▊ Left 3/4
+            return [BlockRect(x: 0, y: 0, w: cellW * 3/4, h: cellH, alpha: 1)]
+        case 0x258B: // ▋ Left 5/8
+            return [BlockRect(x: 0, y: 0, w: cellW * 5/8, h: cellH, alpha: 1)]
+        case 0x258C: // ▌ Left half
+            return [BlockRect(x: 0, y: 0, w: halfW, h: cellH, alpha: 1)]
+        case 0x258D: // ▍ Left 3/8
+            return [BlockRect(x: 0, y: 0, w: cellW * 3/8, h: cellH, alpha: 1)]
+        case 0x258E: // ▎ Left 1/4
+            return [BlockRect(x: 0, y: 0, w: cellW / 4, h: cellH, alpha: 1)]
+        case 0x258F: // ▏ Left 1/8
+            return [BlockRect(x: 0, y: 0, w: cellW / 8, h: cellH, alpha: 1)]
+        case 0x2590: // ▐ Right half
+            return [BlockRect(x: halfW, y: 0, w: halfW, h: cellH, alpha: 1)]
+        case 0x2591: // ░ Light shade
+            return [BlockRect(x: 0, y: 0, w: cellW, h: cellH, alpha: 0.25)]
+        case 0x2592: // ▒ Medium shade
+            return [BlockRect(x: 0, y: 0, w: cellW, h: cellH, alpha: 0.50)]
+        case 0x2593: // ▓ Dark shade
+            return [BlockRect(x: 0, y: 0, w: cellW, h: cellH, alpha: 0.75)]
+        case 0x2594: // ▔ Upper 1/8
+            return [BlockRect(x: 0, y: 0, w: cellW, h: cellH / 8, alpha: 1)]
+        case 0x2595: // ▕ Right 1/8
+            return [BlockRect(x: cellW * 7/8, y: 0, w: cellW / 8, h: cellH, alpha: 1)]
+        case 0x2596: // ▖ Quadrant lower left
+            return [BlockRect(x: 0, y: halfH, w: halfW, h: halfH, alpha: 1)]
+        case 0x2597: // ▗ Quadrant lower right
+            return [BlockRect(x: halfW, y: halfH, w: halfW, h: halfH, alpha: 1)]
+        case 0x2598: // ▘ Quadrant upper left
+            return [BlockRect(x: 0, y: 0, w: halfW, h: halfH, alpha: 1)]
+        case 0x2599: // ▙ Quadrant UL + LL + LR
+            return [
+                BlockRect(x: 0, y: 0, w: halfW, h: cellH, alpha: 1),
+                BlockRect(x: halfW, y: halfH, w: halfW, h: halfH, alpha: 1),
+            ]
+        case 0x259A: // ▚ Quadrant UL + LR
+            return [
+                BlockRect(x: 0, y: 0, w: halfW, h: halfH, alpha: 1),
+                BlockRect(x: halfW, y: halfH, w: halfW, h: halfH, alpha: 1),
+            ]
+        case 0x259B: // ▛ Quadrant UL + UR + LL
+            return [
+                BlockRect(x: 0, y: 0, w: cellW, h: halfH, alpha: 1),
+                BlockRect(x: 0, y: halfH, w: halfW, h: halfH, alpha: 1),
+            ]
+        case 0x259C: // ▜ Quadrant UL + UR + LR
+            return [
+                BlockRect(x: 0, y: 0, w: cellW, h: halfH, alpha: 1),
+                BlockRect(x: halfW, y: halfH, w: halfW, h: halfH, alpha: 1),
+            ]
+        case 0x259D: // ▝ Quadrant upper right
+            return [BlockRect(x: halfW, y: 0, w: halfW, h: halfH, alpha: 1)]
+        case 0x259E: // ▞ Quadrant UR + LL
+            return [
+                BlockRect(x: halfW, y: 0, w: halfW, h: halfH, alpha: 1),
+                BlockRect(x: 0, y: halfH, w: halfW, h: halfH, alpha: 1),
+            ]
+        case 0x259F: // ▟ Quadrant UR + LL + LR
+            return [
+                BlockRect(x: halfW, y: 0, w: halfW, h: halfH, alpha: 1),
+                BlockRect(x: 0, y: halfH, w: cellW, h: halfH, alpha: 1),
+            ]
+        default:
+            return [BlockRect(x: 0, y: 0, w: cellW, h: cellH, alpha: 1)]
+        }
     }
 
     // MARK: - Color Resolution
