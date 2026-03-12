@@ -11,6 +11,8 @@ jobs:
     runs-on: macos-14
     permissions:
       contents: write
+    env:
+      HAS_CERT: ${{ secrets.DEVELOPER_ID_CERT != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,7 +28,7 @@ jobs:
           bash scripts/bundle.sh
 
       - name: Import signing certificate
-        if: ${{ secrets.DEVELOPER_ID_CERT != '' }}
+        if: env.HAS_CERT == 'true'
         env:
           CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERT }}
           CERT_PASSWORD: ${{ secrets.CERT_PASSWORD }}
@@ -39,7 +41,7 @@ jobs:
           rm cert.p12
 
       - name: Sign, package DMG, and notarize
-        if: ${{ secrets.DEVELOPER_ID_CERT != '' }}
+        if: env.HAS_CERT == 'true'
         env:
           CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -50,7 +52,7 @@ jobs:
           bash scripts/build-dmg.sh --skip-build --sign "$CODESIGN_IDENTITY"
 
       - name: Package DMG (ad-hoc signed)
-        if: ${{ secrets.DEVELOPER_ID_CERT == '' }}
+        if: env.HAS_CERT != 'true'
         run: |
           bash scripts/build-dmg.sh --skip-build
 
