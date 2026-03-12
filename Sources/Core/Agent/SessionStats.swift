@@ -25,6 +25,11 @@ public final class SessionStats {
     private var _costHistory: [(Date, Double)] = []
     private let maxCostHistory = 200
 
+    // Per-task cost tracking
+    private var _taskStartCost: Double = 0
+    private var _taskCosts: [Double] = []
+    private let maxTaskCosts = 100
+
     public init(startedAt: Date = Date()) {
         self.sessionStartedAt = startedAt
     }
@@ -39,6 +44,20 @@ public final class SessionStats {
     public var totalSubagents: Int { lock.withLock { _totalSubagents } }
     public var lastActiveAt: Date? { lock.withLock { _lastActiveAt } }
     public var costHistory: [(Date, Double)] { lock.withLock { _costHistory } }
+    public var taskCosts: [Double] { lock.withLock { _taskCosts } }
+
+    /// Average cost per completed task.
+    public var averageTaskCost: Double? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !_taskCosts.isEmpty else { return nil }
+        return _taskCosts.reduce(0, +) / Double(_taskCosts.count)
+    }
+
+    /// Cost of the most recently completed task.
+    public var lastTaskCost: Double? {
+        lock.withLock { _taskCosts.last }
+    }
 
     /// Current idle duration. Returns 0 if the agent is active.
     public var currentIdleDuration: TimeInterval {
@@ -80,9 +99,23 @@ public final class SessionStats {
         lock.unlock()
     }
 
-    /// Record a task completion.
+    /// Record a task completion. Calculates per-task cost from the delta since task start.
     public func recordTaskCompleted() {
-        lock.withLock { _totalTasks += 1 }
+        lock.lock()
+        _totalTasks += 1
+        let taskCost = _totalCost - _taskStartCost
+        if taskCost > 0 {
+            _taskCosts.append(taskCost)
+            if _taskCosts.count > maxTaskCosts {
+                _taskCosts.removeFirst()
+            }
+        }
+        lock.unlock()
+    }
+
+    /// Mark the start of a new task (records current cost for delta calculation).
+    public func recordTaskStarted() {
+        lock.withLock { _taskStartCost = _totalCost }
     }
 
     /// Record an error.

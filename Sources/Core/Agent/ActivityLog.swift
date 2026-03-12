@@ -91,4 +91,172 @@ public final class ActivityLog {
         defer { lock.unlock() }
         return _events.count
     }
+
+    // MARK: - Query Methods
+
+    /// Group events by session ID.
+    public func eventsBySession() -> [UUID: [ActivityEvent]] {
+        Dictionary(grouping: events, by: \.sessionId)
+    }
+
+    /// Summary of activity since a given date.
+    public func summary(since: Date) -> ActivitySummary {
+        let recentEvents = events.filter { $0.timestamp > since }
+        var tasksCompleted = 0
+        var filesChanged = Set<String>()
+        var errors = 0
+        var sessionIds = Set<UUID>()
+        for event in recentEvents {
+            sessionIds.insert(event.sessionId)
+            switch event.kind {
+            case .taskCompleted:
+                tasksCompleted += 1
+            case .fileWrite(let path, _, _):
+                filesChanged.insert(path)
+            case .error:
+                errors += 1
+            default:
+                break
+            }
+        }
+
+        return ActivitySummary(
+            tasksCompleted: tasksCompleted,
+            filesChanged: filesChanged.count,
+            errors: errors,
+            activeSessions: sessionIds.count,
+            eventCount: recentEvents.count
+        )
+    }
+
+    /// Files changed, grouped by session.
+    public func filesChangedBySession() -> [UUID: [String]] {
+        var result: [UUID: [String]] = [:]
+        for event in events {
+            if case .fileWrite(let path, _, _) = event.kind {
+                result[event.sessionId, default: []].append(path)
+            }
+        }
+        return result
+    }
+
+    /// Most recent event timestamp per session (for sorting sessions by activity).
+    public func lastActivityBySession() -> [UUID: Date] {
+        var result: [UUID: Date] = [:]
+        for event in events {
+            if let existing = result[event.sessionId] {
+                if event.timestamp > existing {
+                    result[event.sessionId] = event.timestamp
+                }
+            } else {
+                result[event.sessionId] = event.timestamp
+            }
+        }
+        return result
+    }
+
+    /// Session name for a given session ID (from most recent event).
+    public func sessionName(for sessionId: UUID) -> String? {
+        events.last(where: { $0.sessionId == sessionId })?.sessionName
+    }
+
+    /// Export all events as JSON-serializable dictionaries.
+    public func exportJSON() -> [[String: Any]] {
+        let formatter = ISO8601DateFormatter()
+        return events.map { event in
+            var dict: [String: Any] = [
+                "timestamp": formatter.string(from: event.timestamp),
+                "sessionId": event.sessionId.uuidString,
+                "sessionName": event.sessionName,
+                "kind": event.kind.label,
+            ]
+            switch event.kind {
+            case .fileRead(let path):
+                dict["path"] = path
+            case .fileWrite(let path, let added, let removed):
+                dict["path"] = path
+                if let a = added { dict["added"] = a }
+                if let r = removed { dict["removed"] = r }
+            case .commandRun(let cmd):
+                dict["command"] = cmd
+            case .commandCompleted(let cmd, let exit, let dur):
+                if let c = cmd { dict["command"] = c }
+                if let e = exit { dict["exitCode"] = e }
+                dict["duration"] = dur
+            case .error(let msg):
+                dict["message"] = msg
+            case .modelChanged(let model):
+                dict["model"] = model
+            case .taskCompleted(let dur):
+                dict["duration"] = dur
+            case .subagentStarted(let name, let desc):
+                dict["name"] = name
+                dict["description"] = desc
+            case .subagentCompleted(let name, let dur):
+                dict["name"] = name
+                dict["duration"] = dur
+            case .stateChanged(let from, let to):
+                dict["from"] = from.rawValue
+                dict["to"] = to.rawValue
+            case .taskStarted:
+                break
+            }
+            return dict
+        }
+    }
+}
+
+/// Summary of activity over a time window.
+public struct ActivitySummary {
+    public let tasksCompleted: Int
+    public let filesChanged: Int
+    public let errors: Int
+    public let activeSessions: Int
+    public let eventCount: Int
+
+    public init(tasksCompleted: Int, filesChanged: Int, errors: Int, activeSessions: Int, eventCount: Int) {
+        self.tasksCompleted = tasksCompleted
+        self.filesChanged = filesChanged
+        self.errors = errors
+        self.activeSessions = activeSessions
+        self.eventCount = eventCount
+    }
+}
+
+// MARK: - EventKind helpers
+
+extension ActivityEvent.EventKind {
+    /// Human-readable label for the event kind.
+    public var label: String {
+        switch self {
+        case .taskStarted: return "taskStarted"
+        case .taskCompleted: return "taskCompleted"
+        case .fileRead: return "fileRead"
+        case .fileWrite: return "fileWrite"
+        case .commandRun: return "commandRun"
+        case .commandCompleted: return "commandCompleted"
+        case .error: return "error"
+        case .modelChanged: return "modelChanged"
+        case .stateChanged: return "stateChanged"
+        case .subagentStarted: return "subagentStarted"
+        case .subagentCompleted: return "subagentCompleted"
+        }
+    }
+
+    /// Category for filtering.
+    public var category: EventCategory {
+        switch self {
+        case .fileRead, .fileWrite: return .files
+        case .commandRun, .commandCompleted: return .commands
+        case .error: return .errors
+        case .taskStarted, .taskCompleted: return .tasks
+        case .subagentStarted, .subagentCompleted: return .subagents
+        case .stateChanged, .modelChanged: return .state
+        }
+    }
+}
+
+/// Categories for filtering events in the UI.
+public enum EventCategory: String, CaseIterable {
+    case files, commands, errors, tasks, subagents, state
 }

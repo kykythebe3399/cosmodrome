@@ -59,6 +59,8 @@ final class MCPBridge: MCPServerDelegate {
             return stopRecording(sessionId: uuid)
         case "get_fleet_stats":
             return getFleetStats()
+        case "get_activity_log":
+            return getActivityLog(arguments: arguments)
         default:
             return .failure(MCPBridgeError.unknownTool(name))
         }
@@ -249,6 +251,82 @@ final class MCPBridge: MCPServerDelegate {
         }
 
         return .success(lines.joined(separator: "\n"))
+    }
+
+    private func getActivityLog(arguments: [String: Any]) -> Result<String, Error> {
+        guard let store = projectStore else {
+            return .failure(MCPBridgeError.notConnected)
+        }
+
+        // Collect events from all projects
+        var allEvents: [ActivityEvent] = []
+        for project in store.projects {
+            allEvents.append(contentsOf: project.activityLog.events)
+        }
+
+        // Filter by time window
+        if let minutes = arguments["since_minutes"] as? Int {
+            let cutoff = Date().addingTimeInterval(-Double(minutes) * 60)
+            allEvents = allEvents.filter { $0.timestamp > cutoff }
+        }
+
+        // Filter by session
+        if let sessionIdStr = arguments["session_id"] as? String,
+           let sessionId = UUID(uuidString: sessionIdStr) {
+            allEvents = allEvents.filter { $0.sessionId == sessionId }
+        }
+
+        // Filter by category
+        if let categoryStr = arguments["category"] as? String,
+           let category = EventCategory(rawValue: categoryStr) {
+            allEvents = allEvents.filter { $0.kind.category == category }
+        }
+
+        // Sort by timestamp
+        allEvents.sort { $0.timestamp < $1.timestamp }
+
+        // Format as JSON
+        let formatter = ISO8601DateFormatter()
+        var jsonEvents: [[String: Any]] = []
+        for event in allEvents.suffix(500) {
+            var dict: [String: Any] = [
+                "timestamp": formatter.string(from: event.timestamp),
+                "session": event.sessionName,
+                "kind": event.kind.label,
+            ]
+            switch event.kind {
+            case .fileRead(let path):
+                dict["path"] = path
+            case .fileWrite(let path, let added, let removed):
+                dict["path"] = path
+                if let a = added { dict["added"] = a }
+                if let r = removed { dict["removed"] = r }
+            case .commandRun(let cmd):
+                dict["command"] = cmd
+            case .commandCompleted(let cmd, let exit, _):
+                if let c = cmd { dict["command"] = c }
+                if let e = exit { dict["exitCode"] = e }
+            case .error(let msg):
+                dict["message"] = msg
+            case .taskCompleted(let dur):
+                dict["duration"] = dur
+            case .subagentStarted(let name, let desc):
+                dict["name"] = name
+                dict["description"] = desc
+            case .subagentCompleted(let name, let dur):
+                dict["name"] = name
+                dict["duration"] = dur
+            default:
+                break
+            }
+            jsonEvents.append(dict)
+        }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: jsonEvents, options: [.prettyPrinted, .sortedKeys]),
+              let str = String(data: data, encoding: .utf8) else {
+            return .success("[]")
+        }
+        return .success(str)
     }
 
     /// Called from the I/O path to record output if a recorder is active.

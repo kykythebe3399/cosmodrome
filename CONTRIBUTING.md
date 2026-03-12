@@ -8,10 +8,21 @@ Cosmodrome is a native macOS terminal emulator for developers who run multiple A
 
 1. Fork the repository and clone your fork.
 2. Make sure you have macOS 14 (Sonoma) or later.
-3. Install Xcode CommandLineTools if you have not already (`xcode-select --install`). Xcode itself is not required for building.
+3. Install Xcode or Command Line Tools (`xcode-select --install`).
 4. Run `swift build` from the project root to verify the build succeeds.
 
 ## Development Setup
+
+**Build targets:**
+
+The project has 4 targets defined in `Package.swift`:
+
+| Target | Type | Description |
+|--------|------|-------------|
+| `Core` | Library | Domain logic (no UI imports) |
+| `CosmodromeApp` | Executable | Main app with AppKit + Metal UI |
+| `CosmodromeHook` | Executable | Tiny binary for Claude Code hooks |
+| `CosmodromeCLI` | Executable | CLI control tool (`cosmoctl`) |
 
 **Build (debug):**
 
@@ -28,7 +39,13 @@ swift build -c release
 **Build .app bundle:**
 
 ```bash
-bash Scripts/bundle.sh
+bash scripts/bundle.sh
+```
+
+**Build DMG:**
+
+```bash
+bash scripts/build-dmg.sh
 ```
 
 **Run:**
@@ -43,7 +60,13 @@ bash Scripts/bundle.sh
 swift test
 ```
 
-Note: running tests requires Xcode (not just CommandLineTools) because XCTest links against the Xcode toolchain.
+Note: running tests requires Xcode (not just Command Line Tools) because XCTest links against the Xcode toolchain.
+
+**Prepare a release:**
+
+```bash
+bash scripts/release.sh 1.2.0
+```
 
 ## Architecture
 
@@ -53,6 +76,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) for a full overview. The key points rele
 - **Single MTKView.** One Metal view renders all terminal sessions using viewport scissoring. There is not one view per session.
 - **kqueue multiplexer.** All PTY I/O goes through a single kqueue-based multiplexer. No thread-per-PTY, no polling.
 - **Agent detection is inline.** When PTY output arrives on the I/O thread, pattern matching runs immediately on that data. No separate polling thread.
+- **Hook events are authoritative.** When Claude Code hooks are configured, structured JSON events supersede regex-based state detection.
 - **@Observable for state.** Domain models use the Observation framework. No Combine, no NotificationCenter for domain events.
 
 ## Code Style
@@ -112,7 +136,7 @@ Feature requests are welcome. Please check existing issues first to avoid duplic
 
 ## Code of Conduct
 
-This project follows the Contributor Covenant Code of Conduct. See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for details.
+This project follows the [Contributor Covenant Code of Conduct v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). By participating, you are expected to uphold this code.
 
 ## License
 

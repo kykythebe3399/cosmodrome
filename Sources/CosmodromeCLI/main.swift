@@ -32,6 +32,17 @@ switch command {
 case "status", "list-projects", "fleet-stats":
     break
 
+case "activity":
+    if let idx = args.firstIndex(of: "--since"), idx + 1 < args.count {
+        requestArgs["since_minutes"] = args[idx + 1]
+    }
+    if let idx = args.firstIndex(of: "--session"), idx + 1 < args.count {
+        requestArgs["session_id"] = args[idx + 1]
+    }
+    if let idx = args.firstIndex(of: "--category"), idx + 1 < args.count {
+        requestArgs["category"] = args[idx + 1]
+    }
+
 case "list-sessions":
     if let idx = args.firstIndex(of: "--project"), idx + 1 < args.count {
         requestArgs["project_id"] = args[idx + 1]
@@ -194,11 +205,15 @@ func printUsage() {
       new-session [options]         Create a new session
         --project ID                  Target project (default: active)
         --name NAME                   Session name (default: Shell)
-        --command CMD                 Command to run (default: /bin/zsh)
+        --command CMD                 Command to run (default: $SHELL)
         --agent                       Mark as agent session
       content <session-id>          Get terminal content
         --lines N                     Last N lines only
       fleet-stats                   Show fleet-wide agent statistics
+      activity [options]            Show activity log (agent events timeline)
+        --since N                     Last N minutes only (default: all)
+        --session ID                  Filter to specific session
+        --category CAT                Filter: files, commands, errors, tasks, subagents
     """
     print(usage)
 }

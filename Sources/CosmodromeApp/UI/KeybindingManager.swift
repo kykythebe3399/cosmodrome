@@ -116,6 +116,7 @@ final class KeybindingManager {
         commandBindings[Binding(key: 3, modifiers: [])] = .toggleFocus        // f
         commandBindings[Binding(key: 44, modifiers: [])] = .commandPalette    // /
         commandBindings[Binding(key: 5, modifiers: [])] = .toggleFleetView    // g (fleet/global)
+        commandBindings[Binding(key: 0, modifiers: [])] = .toggleActivityLog  // a (activity)
         commandBindings[Binding(key: 53, modifiers: [])] = .enterNormalMode   // Escape
 
         // Also keep Ctrl+Space in command mode to toggle back

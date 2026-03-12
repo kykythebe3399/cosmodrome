@@ -25,6 +25,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     private var fleetOverlayHost: NSHostingView<FleetOverviewView>?
     private var fleetViewVisible = false
 
+    /// User's preferred shell from $SHELL, falling back to /bin/zsh.
+    private static let defaultShell: String = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+
     init() {
         // Clear any saved frame from previous broken runs
         NSWindow.removeFrame(usingName: "CosmodromeMain")
@@ -314,7 +317,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
         let defaultSession = Session(
             name: "Shell",
-            command: "/bin/zsh",
+            command: Self.defaultShell,
             cwd: homeDir
         )
         let project = Project(
@@ -377,7 +380,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
 
             let session = Session(
                 name: "Shell",
-                command: "/bin/zsh",
+                command: Self.defaultShell,
                 cwd: dirPath
             )
             let project = Project(
@@ -414,7 +417,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             let dirPath = url.hasDirectoryPath ? url.path : url.deletingLastPathComponent().path
             let session = Session(
                 name: "Shell",
-                command: "/bin/zsh",
+                command: Self.defaultShell,
                 cwd: dirPath
             )
             let project = Project(
@@ -432,7 +435,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
         let session = Session(
             name: "Shell \(project.sessions.count + 1)",
-            command: "/bin/zsh",
+            command: Self.defaultShell,
             cwd: project.rootPath ?? homeDir
         )
         project.sessions.append(session)
@@ -722,7 +725,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         // Create a new session in the worktree directory
         let session = Session(
             name: "wt/\(wt.branch)",
-            command: "/bin/zsh",
+            command: Self.defaultShell,
             cwd: wt.path
         )
         project.sessions.append(session)
@@ -742,7 +745,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         if GitWorktree.create(in: rootPath, branch: branchName, path: worktreePath) {
             let session = Session(
                 name: "wt/\(branchName)",
-                command: "/bin/zsh",
+                command: Self.defaultShell,
                 cwd: worktreePath
             )
             project.sessions.append(session)
@@ -1001,45 +1004,41 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         activityLogVisible.toggle()
 
         if activityLogVisible {
-            showActivityLogPanel()
+            showActivityLogOverlay()
         } else {
-            hideActivityLogPanel()
+            hideActivityLogOverlay()
         }
     }
 
-    private func showActivityLogPanel() {
+    private func showActivityLogOverlay() {
         guard let window, let containerView = window.contentView else { return }
 
-        // Remove existing overlay if any
         activityLogOverlay?.removeFromSuperview()
 
-        guard let project = projectStore.activeProject else { return }
-
         let logView = ActivityLogView(
-            activityLog: project.activityLog,
-            projectName: project.name,
+            projects: projectStore.projects,
+            onFocusSession: { [weak self] projectId, sessionId in
+                self?.hideActivityLogOverlay()
+                self?.activityLogVisible = false
+                self?.jumpToSession(projectId: projectId, sessionId: sessionId)
+            },
             onDismiss: { [weak self] in
-                self?.hideActivityLogPanel()
+                self?.hideActivityLogOverlay()
                 self?.activityLogVisible = false
             }
         )
 
         let host = NSHostingView(rootView: AnyView(logView))
-        let panelWidth: CGFloat = 320
-        host.frame = NSRect(
-            x: containerView.bounds.width - panelWidth,
-            y: 28, // above status bar
-            width: panelWidth,
-            height: containerView.bounds.height - 28
-        )
-        host.autoresizingMask = [.height, .minXMargin]
+        host.frame = containerView.bounds
+        host.autoresizingMask = [.width, .height]
         containerView.addSubview(host)
         activityLogOverlay = host
     }
 
-    private func hideActivityLogPanel() {
+    private func hideActivityLogOverlay() {
         activityLogOverlay?.removeFromSuperview()
         activityLogOverlay = nil
+        window?.makeFirstResponder(terminalContentView)
     }
 
     // MARK: - Fleet Overview
@@ -1147,7 +1146,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             let fileArgs = filesChanged.prefix(20).joined(separator: " ")
             let diffSession = Session(
                 name: "diff",
-                command: "/bin/zsh",
+                command: Self.defaultShell,
                 arguments: ["-c", "git diff \(fileArgs); read"],
                 cwd: project.rootPath ?? session.cwd
             )
@@ -1160,7 +1159,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             // Open a new session running the test command
             let testSession = Session(
                 name: "tests",
-                command: "/bin/zsh",
+                command: Self.defaultShell,
                 arguments: ["-c", "swift test; read"],
                 cwd: project.rootPath ?? session.cwd
             )
@@ -1353,7 +1352,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
 
         case "new-session":
             let projectIdStr = request.args?["project_id"]
-            let command = request.args?["command"] ?? "/bin/zsh"
+            let command = request.args?["command"] ?? Self.defaultShell
             let name = request.args?["name"] ?? "Shell"
             let isAgent = request.args?["agent"] == "true"
 
@@ -1450,8 +1449,76 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             }
             return .success("{}")
 
+        case "activity":
+            var allEvents: [ActivityEvent] = []
+            for project in projectStore.projects {
+                allEvents.append(contentsOf: project.activityLog.events)
+            }
+
+            // Filter by time window
+            if let minutesStr = request.args?["since_minutes"], let minutes = Int(minutesStr) {
+                let cutoff = Date().addingTimeInterval(-Double(minutes) * 60)
+                allEvents = allEvents.filter { $0.timestamp > cutoff }
+            }
+
+            // Filter by session
+            if let sessionIdStr = request.args?["session_id"],
+               let sessionId = UUID(uuidString: sessionIdStr) {
+                allEvents = allEvents.filter { $0.sessionId == sessionId }
+            }
+
+            // Filter by category
+            if let categoryStr = request.args?["category"],
+               let category = EventCategory(rawValue: categoryStr) {
+                allEvents = allEvents.filter { $0.kind.category == category }
+            }
+
+            allEvents.sort { $0.timestamp < $1.timestamp }
+
+            let formatter = ISO8601DateFormatter()
+            var jsonEvents: [[String: Any]] = []
+            for event in allEvents.suffix(500) {
+                var dict: [String: Any] = [
+                    "timestamp": formatter.string(from: event.timestamp),
+                    "session": event.sessionName,
+                    "kind": event.kind.label,
+                ]
+                switch event.kind {
+                case .fileRead(let path):
+                    dict["path"] = path
+                case .fileWrite(let path, let added, let removed):
+                    dict["path"] = path
+                    if let a = added { dict["added"] = a }
+                    if let r = removed { dict["removed"] = r }
+                case .commandRun(let cmd):
+                    dict["command"] = cmd
+                case .commandCompleted(let cmd, let exit, _):
+                    if let c = cmd { dict["command"] = c }
+                    if let e = exit { dict["exitCode"] = e }
+                case .error(let msg):
+                    dict["message"] = msg
+                case .taskCompleted(let dur):
+                    dict["duration"] = dur
+                case .subagentStarted(let name, let desc):
+                    dict["name"] = name
+                    dict["description"] = desc
+                case .subagentCompleted(let name, let dur):
+                    dict["name"] = name
+                    dict["duration"] = dur
+                default:
+                    break
+                }
+                jsonEvents.append(dict)
+            }
+
+            if let data = try? JSONSerialization.data(withJSONObject: jsonEvents, options: [.prettyPrinted, .sortedKeys]),
+               let json = String(data: data, encoding: .utf8) {
+                return .success(json)
+            }
+            return .success("[]")
+
         default:
-            return .failure("Unknown command: \(request.command). Available: list-projects, list-sessions, focus, send, new-session, status, content, fleet-stats")
+            return .failure("Unknown command: \(request.command). Available: list-projects, list-sessions, focus, send, new-session, status, content, fleet-stats, activity")
         }
     }
 

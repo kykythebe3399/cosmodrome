@@ -90,6 +90,7 @@ public final class AgentDetector {
                     timestamp: now, sessionId: sessionId, sessionName: sessionName,
                     kind: .taskStarted
                 ))
+                stats?.recordTaskStarted()
             }
 
             if let model = modelDetector.currentModel {
@@ -132,6 +133,9 @@ public final class AgentDetector {
         // Map hook events to agent state
         switch event.hookName {
         case "PreToolUse":
+            if state != .working {
+                stats?.recordTaskStarted()
+            }
             state = .working
             lastChange = Date()
         case "Stop":

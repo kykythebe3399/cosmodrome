@@ -4,11 +4,9 @@
 
 One window. All projects visible. Agent state at a glance.
 
-<!-- Badges: uncomment and update when applicable
 [![Build](https://github.com/rinaldofesta/cosmodrome/actions/workflows/ci.yml/badge.svg)](https://github.com/rinaldofesta/cosmodrome/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple)](https://developer.apple.com/macos/)
--->
 
 <p align="center">
   <img src="Resources/AppIcon_1024.png" alt="Cosmodrome" width="256" />
@@ -22,13 +20,26 @@ Built with Swift, AppKit, and Metal. No Electron. No Tauri. No tmux wrapper.
 
 ## Features
 
+### Activity Log -- "What happened while I was away"
+
+The hero feature. A full-screen overlay (`Cmd+L`) showing a structured timeline of everything your agents did: files changed, commands run, errors encountered, cost per task. Sessions are grouped and collapsible, sorted by most recent activity. Filter by time window (last hour, today, all), by event type (files, commands, errors), or by session.
+
+Come back from lunch, open the Activity Log, and see exactly what 5 agents accomplished while you were gone.
+
+### Fleet Overview
+
+Full-screen dashboard (`Cmd+Shift+F`) showing all agents across all projects. Agent cards sorted by priority (needs input first, then errors, then working, then idle). Filter by state. Aggregate stats: total cost, tasks completed, files changed.
+
 ### GPU-Accelerated Rendering
+
 A single Metal `MTKView` renders all visible terminal sessions via viewport scissoring. Shared glyph atlas, triple-buffered vertex data, no per-frame allocations. Sub-4ms frame times.
 
 ### Project-First Organization
+
 Group terminals by project, not by tab order. Each project defines its sessions in a `cosmodrome.yml` file: dev servers, databases, AI agents -- all launched and managed together.
 
 ### AI Agent State Detection
+
 Cosmodrome automatically detects Claude Code, Aider, Codex, and Gemini sessions and reports their state:
 
 | State | Indicator | Meaning |
@@ -38,48 +49,70 @@ Cosmodrome automatically detects Claude Code, Aider, Codex, and Gemini sessions 
 | Error | Red | Something failed |
 | Inactive | -- | Idle or not an agent session |
 
-### Activity Log
-A passive, per-project timeline of what agents did while you were not watching: files read and written, commands run, errors encountered. Observe, never orchestrate.
+### Cost Tracking
+
+Per-session and per-task cost tracking with fleet-wide aggregation. See how much each agent is spending, average cost per task, and total fleet cost. Cost history with sparkline visualization.
+
+### Claude Code Hooks Integration
+
+Deep integration with Claude Code via structured hooks. Cosmodrome receives real-time JSON events for every tool use (file reads, writes, commands, subagent spawns) with structured data extraction: file paths, exit codes, cost deltas. Hook events are authoritative -- when available, they supersede regex-based state detection.
 
 ### Model Detection
+
 Detects which LLM model each agent is using (Opus, Sonnet, GPT-4, etc.) and displays it in the status bar.
 
 ### Completion Actions
+
 When an agent finishes a task, Cosmodrome suggests next steps -- "Open diff", "Run tests", "Start review agent" -- without ever auto-triggering them.
 
-### Hook Server
-Structured agent lifecycle events via Unix socket IPC. Claude Code hooks emit JSON events that Cosmodrome ingests for more reliable state tracking than regex alone.
-
 ### Session Recording
+
 Record terminal sessions in asciicast v2 format for playback and sharing.
 
 ### MCP Server
-JSON-RPC 2.0 server over stdio for programmatic control: list projects, query agent states, send input, start recordings.
+
+JSON-RPC 2.0 server over stdio for programmatic control: list projects, query agent states, send input, start recordings, get fleet stats, get activity log.
 
 ### CLI Control Plane
-`cosmoctl` provides command-line access to a running Cosmodrome instance via Unix socket: query status, focus sessions, send input, create new sessions.
+
+`cosmoctl` provides command-line access to a running Cosmodrome instance via Unix socket.
 
 ### Additional Features
-- **Command palette** (Cmd+P) for quick access to all actions
-- **Modal keybindings** with vim-style command mode (Ctrl+Space)
+
+- **Command palette** (`Cmd+P`) for quick access to all actions
+- **Modal keybindings** with vim-style command mode (`Ctrl+Space`)
 - **Theme system** with dark, light, and custom YAML themes
 - **Git worktree integration** for multi-branch workflows
 - **OSC 133 semantic prompt tracking** for shell integration
 - **Session persistence** with scrollback restoration across restarts
 - **Native macOS notifications** for agent state changes
 - **Grid and Focus layout modes** -- grid for overview, focus for deep work
+- **Font zoom** (`Cmd+=`/`Cmd+-`) with persistence
 
 ---
 
 ## Requirements
 
 - macOS 14 (Sonoma) or later
-- Swift 5.10+ toolchain (Xcode or Command Line Tools)
 - A GPU that supports Metal (all Macs since 2012)
+
+For building from source:
+- Swift 5.10+ toolchain (Xcode or Command Line Tools)
+- Xcode (for running tests and building DMG)
 
 ---
 
 ## Installation
+
+### DMG (recommended)
+
+Download the latest `.dmg` from [GitHub Releases](https://github.com/rinaldofesta/cosmodrome/releases), open it, and drag Cosmodrome to Applications.
+
+### Homebrew Cask
+
+```bash
+brew install --cask cosmodrome
+```
 
 ### Build from Source
 
@@ -87,14 +120,23 @@ JSON-RPC 2.0 server over stdio for programmatic control: list projects, query ag
 git clone https://github.com/rinaldofesta/cosmodrome.git
 cd cosmodrome
 
-# Build
-swift build -c release
-
-# Create .app bundle
-bash Scripts/bundle.sh
+# Build release + create .app bundle
+bash scripts/bundle.sh
 
 # Install
 cp -r build/Cosmodrome.app /Applications/
+```
+
+### Build DMG from Source
+
+```bash
+# Ad-hoc signed (local dev):
+bash scripts/build-dmg.sh
+
+# Developer ID signed (for distribution):
+bash scripts/build-dmg.sh --sign "Developer ID Application: Your Name (TEAMID)"
+
+# Output: build/Cosmodrome.dmg
 ```
 
 ### Run Without Installing
@@ -113,41 +155,41 @@ swift build
 Open Cosmodrome from `/Applications`, Spotlight, or the command line:
 
 ```bash
-# Direct launch
-.build/debug/CosmodromeApp
-
-# With MCP server enabled
-.build/debug/CosmodromeApp --mcp
-
-# Version
-.build/debug/CosmodromeApp --version
+# With MCP server enabled (for AI agent integration)
+/Applications/Cosmodrome.app/Contents/MacOS/Cosmodrome --mcp
 ```
 
 ### Keyboard Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
-| Cmd+T | New session |
-| Cmd+W | Close session |
-| Cmd+1-9 | Switch project |
-| Cmd+Enter | Toggle focus mode |
-| Cmd+P | Command palette |
-| Cmd+L | Activity log |
-| Cmd+Shift+N | Jump to next agent needing input |
-| Cmd+] / Cmd+[ | Next / previous session |
-| Ctrl+Space | Toggle command mode |
+| `Cmd+T` | New session |
+| `Cmd+W` | Close session |
+| `Cmd+1-9` | Switch project |
+| `Cmd+Enter` | Toggle focus mode |
+| `Cmd+P` | Command palette |
+| `Cmd+L` | Activity log |
+| `Cmd+Shift+F` | Fleet overview |
+| `Cmd+Shift+N` | Jump to next agent needing input |
+| `Cmd+]` / `Cmd+[` | Next / previous project |
+| `Cmd+Shift+]` / `Cmd+Shift+[` | Next / previous session |
+| `Cmd+=` / `Cmd+-` | Zoom in / out |
+| `Cmd+0` | Reset font size |
+| `Ctrl+Space` | Toggle command mode |
 
-**Command mode** (vim-style, after Ctrl+Space):
+**Command mode** (vim-style, after `Ctrl+Space`):
 
 | Key | Action |
 |-----|--------|
-| j / k | Next / previous session |
-| h / l | Previous / next project |
-| n | New session |
-| x | Close session |
-| f | Toggle focus mode |
-| p | Open command palette |
-| Escape | Exit command mode |
+| `j` / `k` | Next / previous session |
+| `h` / `l` | Previous / next project |
+| `n` | New session |
+| `x` | Close session |
+| `f` | Toggle focus mode |
+| `p` or `/` | Open command palette |
+| `a` | Activity log |
+| `g` | Fleet overview |
+| `Escape` | Exit command mode |
 
 ### CLI Control
 
@@ -161,9 +203,75 @@ cosmoctl list-projects
 cosmoctl list-sessions
 cosmoctl focus <session-id>
 cosmoctl send <session-id> "npm test"
-cosmoctl new-session --project <name>
-cosmoctl content <session-id>
+cosmoctl new-session --project <id> --name "Claude" --command "claude" --agent
+cosmoctl content <session-id> --lines 50
+
+# Fleet and activity
+cosmoctl fleet-stats
+cosmoctl activity --since 60 --category files
+cosmoctl activity --session <session-id>
 ```
+
+### MCP Tools
+
+When launched with `--mcp`, Cosmodrome exposes these tools via JSON-RPC 2.0 over stdio:
+
+| Tool | Description |
+|------|-------------|
+| `list_projects` | List all projects with agent states |
+| `list_sessions` | List sessions for a project |
+| `get_session_content` | Get visible terminal content |
+| `send_input` | Send keyboard input to a session |
+| `get_agent_states` | All agent states across all projects |
+| `focus_session` | Switch focus to a session |
+| `start_recording` / `stop_recording` | Asciicast session recording |
+| `get_fleet_stats` | Fleet-wide statistics |
+| `get_activity_log` | Activity timeline with filters |
+
+---
+
+## Claude Code Hooks Setup
+
+To enable deep integration with Claude Code, add Cosmodrome's hook to your Claude Code configuration:
+
+**`~/.claude/settings.json`:**
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "command": "/Applications/Cosmodrome.app/Contents/MacOS/CosmodromeHook"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "/Applications/Cosmodrome.app/Contents/MacOS/CosmodromeHook"
+      }
+    ],
+    "Notification": [
+      {
+        "type": "command",
+        "command": "/Applications/Cosmodrome.app/Contents/MacOS/CosmodromeHook"
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "/Applications/Cosmodrome.app/Contents/MacOS/CosmodromeHook"
+      }
+    ]
+  }
+}
+```
+
+With hooks enabled, Cosmodrome receives structured JSON events for every tool use, providing:
+- Authoritative agent state detection (no regex guessing)
+- File paths, commands, and exit codes from tool use
+- Cost tracking from notification events
+- Subagent spawn/completion tracking
 
 ---
 
@@ -220,10 +328,10 @@ scrollback_lines: 10000
 
 ### State Persistence
 
-Application state (window position, open projects, session state) is saved automatically to:
+Application state (window position, open projects, session state, scrollback) is saved automatically to:
 
 ```
-~/Library/Application Support/Cosmodrome/state.yml
+~/Library/Application Support/Cosmodrome/
 ```
 
 ---
@@ -232,23 +340,16 @@ Application state (window position, open projects, session state) is saved autom
 
 Cosmodrome uses a minimal threading model: one main thread (UI + Metal rendering) and one I/O thread (kqueue-based PTY multiplexer + VT parsing + agent detection). No thread-per-session, no event bus, no Combine.
 
-```
-Main Thread                          I/O Thread (kqueue)
-  AppKit event loop                    kevent() blocks until data
-  Metal rendering (MTKView)            read() from ready PTY fds
-  @Observable UI updates               VT parse + agent detection
-                                       Signal main thread for redraw
-```
-
-Key architectural decisions:
+Key decisions:
 
 - **Single MTKView** for all sessions (viewport scissoring, not N render loops)
 - **kqueue multiplexer** for all PTY I/O (scales to 50+ sessions on one thread)
 - **Agent detection inline on I/O** (pattern match when data arrives, no polling)
 - **@Observable** for state propagation (direct mutation, no indirection)
 - **SwiftTerm** for VT parsing now, **libghostty-vt** when its C API stabilizes
+- **Hook events authoritative** when available, regex fallback otherwise
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full picture, including rendering pipeline details, data model, agent detection pipeline, and hook server design.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full picture.
 
 ---
 
@@ -262,8 +363,6 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full picture, including rendering
 | Startup to interactive | < 200ms |
 | CPU when idle | < 0.5% |
 
-Dirty tracking ensures only changed rows regenerate vertex data. Non-visible sessions skip rendering entirely. The I/O thread sleeps at zero CPU when no PTY has data.
-
 ---
 
 ## Project Structure
@@ -273,20 +372,24 @@ Sources/
   Core/              Domain logic (no UI imports)
     Terminal/           TerminalBackend protocol + SwiftTerm implementation
     PTY/                kqueue multiplexer + PTY process management
-    Agent/              State detection, model detection, activity log
+    Agent/              State detection, model detection, activity log, session stats
     Hooks/              Unix socket server for structured agent events
     Project/            Project + Session models, persistence
     Config/             YAML parsing, user configuration
+    Control/            Unix socket control server for CLI
+    MCP/                Model Context Protocol server (JSON-RPC 2.0)
 
   CosmodromeApp/     App entry point, window management
-    Renderer/           Metal rendering, glyph atlas, font manager, shaders
-    UI/                 Sidebar, content area, status bar, command palette
+    UI/                 Sidebar, content area, status bar, command palette,
+                        fleet overview, activity log, keybindings
 
   CosmodromeHook/    Tiny binary for Claude Code hooks integration
   CosmodromeCLI/     CLI control tool (cosmoctl)
 
-Tests/
-  CoreTests/         Unit tests for domain logic
+scripts/
+  bundle.sh            Build .app bundle from SPM
+  build-dmg.sh         Build + sign + package as DMG
+  release.sh           Tag + build + prepare GitHub release
 ```
 
 ---
@@ -299,7 +402,7 @@ Key guidelines:
 - Profile before optimizing. Use Instruments, not guesswork.
 - No new dependencies without justification. Currently: SwiftTerm, Yams. That's it.
 - `final class` by default. `@Observable` for models. No force-unwrapping outside tests.
-- Run `swift build` before submitting. Tests require Xcode (`swift test`).
+- Run `swift build` before submitting.
 
 ---
 

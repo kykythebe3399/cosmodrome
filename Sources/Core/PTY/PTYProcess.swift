@@ -62,7 +62,14 @@ public func spawnPTY(
             }
         }
 
-        let allArgs = [command] + arguments
+        // Make shells login shells by prefixing argv[0] with '-'
+        // This matches Terminal.app/iTerm2 behavior and ensures
+        // profile files (~/.zprofile, ~/.bash_profile) are loaded.
+        let shellNames: Set<String> = ["zsh", "bash", "sh", "fish", "tcsh", "csh", "dash"]
+        let basename = (command as NSString).lastPathComponent
+        let argv0 = shellNames.contains(basename) ? "-\(basename)" : command
+
+        let allArgs = [argv0] + arguments
         let cArgs = allArgs.map { strdup($0) } + [nil]
         execvp(command, cArgs)
         _exit(127)

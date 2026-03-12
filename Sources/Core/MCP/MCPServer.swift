@@ -129,6 +129,18 @@ public final class MCPServer {
                 "properties": [:] as [String: Any],
             ],
         ],
+        [
+            "name": "get_activity_log",
+            "description": "Get the activity log: structured timeline of agent events (file changes, commands, errors, tasks) across all projects.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "since_minutes": ["type": "integer", "description": "Only events from last N minutes (default: all)"],
+                    "session_id": ["type": "string", "description": "Filter to a specific session UUID"],
+                    "category": ["type": "string", "description": "Filter by category: files, commands, errors, tasks, subagents, state"],
+                ] as [String: Any],
+            ],
+        ],
     ]
 
     // MARK: - Read Loop
