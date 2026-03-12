@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-and-release:
-    name: Build, Sign, Notarize, Release
+    name: Build and Release
     runs-on: macos-14
     permissions:
       contents: write
@@ -26,6 +26,7 @@ jobs:
           bash scripts/bundle.sh
 
       - name: Import signing certificate
+        if: ${{ secrets.DEVELOPER_ID_CERT != '' }}
         env:
           CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERT }}
           CERT_PASSWORD: ${{ secrets.CERT_PASSWORD }}
@@ -38,6 +39,7 @@ jobs:
           rm cert.p12
 
       - name: Sign, package DMG, and notarize
+        if: ${{ secrets.DEVELOPER_ID_CERT != '' }}
         env:
           CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -46,6 +48,11 @@ jobs:
           NOTARIZE: "1"
         run: |
           bash scripts/build-dmg.sh --skip-build --sign "$CODESIGN_IDENTITY"
+
+      - name: Package DMG (ad-hoc signed)
+        if: ${{ secrets.DEVELOPER_ID_CERT == '' }}
+        run: |
+          bash scripts/build-dmg.sh --skip-build
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
