@@ -4,6 +4,7 @@
 
 One window. All projects visible. Agent state at a glance.
 
+[![Release](https://img.shields.io/github/v/release/rinaldofesta/cosmodrome)](https://github.com/rinaldofesta/cosmodrome/releases/latest)
 [![Build](https://github.com/rinaldofesta/cosmodrome/actions/workflows/ci.yml/badge.svg)](https://github.com/rinaldofesta/cosmodrome/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple)](https://developer.apple.com/macos/)

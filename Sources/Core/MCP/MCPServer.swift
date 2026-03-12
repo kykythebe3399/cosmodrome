@@ -248,7 +248,7 @@ public final class MCPServer {
             ],
             "serverInfo": [
                 "name": "cosmodrome",
-                "version": "1.1.0",
+                "version": "0.1.0",
             ],
         ]
         sendResult(id: id, result: response)

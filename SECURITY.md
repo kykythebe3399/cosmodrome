@@ -12,7 +12,7 @@ Cosmodrome is a local macOS desktop application. It does not expose network serv
 
 | Version | Supported |
 |---------|-----------|
-| Latest  | Yes       |
+| 0.1.x   | Yes       |
 
 ## Reporting a Vulnerability
 

@@ -65,7 +65,7 @@ Note: running tests requires Xcode (not just Command Line Tools) because XCTest 
 **Prepare a release:**
 
 ```bash
-bash scripts/release.sh 1.2.0
+bash scripts/release.sh 0.1.0
 ```
 
 ## Architecture

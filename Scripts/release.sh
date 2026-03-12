@@ -17,7 +17,7 @@ SIGN_IDENTITY=""
 
 if [ -z "$VERSION" ]; then
     echo "Usage: ./scripts/release.sh <version> [--sign \"Developer ID Application: ...\"]"
-    echo "Example: ./scripts/release.sh 1.2.0 --sign \"Developer ID Application: Name (TEAM)\""
+    echo "Example: ./scripts/release.sh 0.2.0 --sign \"Developer ID Application: Name (TEAM)\""
     exit 1
 fi
 shift

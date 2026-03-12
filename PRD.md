@@ -1,8 +1,8 @@
 # PRD: Cosmodrome
 
-**Version:** 1.1  
-**Date:** March 2026  
-**Status:** Final
+**Version:** 0.1
+**Date:** March 2026
+**Status:** Released (v0.1.0)
 
 ---
 
@@ -47,7 +47,7 @@ One window. All projects visible. Every agent's state at a glance. Jump to any s
 
 ---
 
-## MVP Features (v0.1)
+## Features (v0.1.0)
 
 ### Project Sidebar
 
@@ -142,19 +142,24 @@ Native macOS notifications when an agent needs input, encounters an error, or co
 
 ---
 
-## Future Features (Post-MVP)
+## Shipped in v0.1.0 (originally post-MVP)
 
-- Live session thumbnails with low-FPS preview rendering
-- Activity log search and filtering (by agent, by file, by time range)
-- Completion action customization (user-defined actions per project)
-- Git worktree integration for agent isolation
-- Smart session templates (auto-detect project stack)
+The following features originally planned for post-MVP were shipped in v0.1.0:
+
+- Activity log with search and filtering (by agent, by file, by time range)
 - MCP server for programmatic agent-to-terminal interaction
-- Session recording and replay
+- Session recording and replay (asciicast v2)
 - Structured agent lifecycle hooks (Claude Code hooks API via Unix socket IPC)
 - OSC 133 semantic prompt tracking (command completion with exit code + duration)
 - Modal keybinding modes (vim-style command mode for navigation)
 - Subagent tracking in activity log (nested events for spawned agents)
+- Git worktree integration for agent isolation
+
+## Future Features
+
+- Live session thumbnails with low-FPS preview rendering
+- Completion action customization (user-defined actions per project)
+- Smart session templates (auto-detect project stack)
 - External terminal orchestration (Ghostty AppleScript integration)
 - Linux port (GTK4 + OpenGL)
 
@@ -201,7 +206,12 @@ Native macOS notifications when an agent needs input, encounters an error, or co
 
 ## Roadmap
 
-**Phase 0 (4 weeks):** Single terminal session rendering. Prove architecture performance.  
-**Phase 1 (8 weeks):** Multi-project, multi-session, agent detection. Alpha release.  
-**Phase 2 (6 weeks):** Thumbnails, worktrees, additional agent support. Public beta.  
-**Phase 3 (8 weeks):** MCP server, recording, Linux port. v1.0 release.
+**Phase 0:** Single terminal session rendering. Prove architecture performance. -- **Done**
+**Phase 1:** Multi-project, multi-session, agent detection. -- **Done**
+**Phase 2:** Themes, worktrees, command palette. -- **Done**
+**Phase 3:** MCP server, session recording. -- **Done**
+**Phase 4:** Claude Code hooks, OSC 133, modal keybindings. -- **Done**
+**Phase 5:** CLI control plane, session persistence, port detection. -- **Done**
+**Phase 6:** Fleet overview, cost tracking, fleet stats. -- **Done**
+
+All phases shipped as **v0.1.0** (March 2026).
