@@ -456,6 +456,12 @@ final class TerminalContentView: NSView {
         } else {
             // Normal scrollback: scroll the viewport through history
             backend.scroll(lines: scrollUp ? lines : -lines)
+
+            // Clear selection on manual scroll — viewport-relative coordinates become stale
+            if selection != nil {
+                selection = nil
+                renderer?.selection = nil
+            }
         }
     }
 
@@ -484,8 +490,23 @@ final class TerminalContentView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard isDragging, var sel = selection else { return }
+        guard isDragging, var sel = selection,
+              let focusedId = focusedSessionId,
+              let pair = sessions.first(where: { $0.session.id == focusedId }) else { return }
         let point = convert(event.locationInWindow, from: nil)
+
+        // Auto-scroll when dragging near edges
+        let edgeZone: CGFloat = 20
+        if let entry = cachedEntries.first(where: { $0.sessionId == focusedId }) {
+            if point.y < entry.frame.minY + edgeZone {
+                // Near bottom edge (NSView coords) → scroll down (newer content)
+                pair.backend.scroll(lines: -2)
+            } else if point.y > entry.frame.maxY - edgeZone {
+                // Near top edge (NSView coords) → scroll up (older content)
+                pair.backend.scroll(lines: 2)
+            }
+        }
+
         if let cell = cellAt(point: point) {
             sel.endRow = cell.row
             sel.endCol = cell.col

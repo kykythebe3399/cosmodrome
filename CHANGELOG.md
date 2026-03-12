@@ -22,6 +22,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Font zoom** -- `Cmd+=`/`Cmd+-`/`Cmd+0` for font size adjustment with persistence.
 - **Idle prominence** -- thumbnails show idle duration with escalating color indicators.
 
+### Fixed
+- **Login shell** -- shells now launch as login shells (argv[0] prefixed with `-`), ensuring `~/.zprofile` and `~/.bash_profile` are loaded. Fixes Homebrew PATH not being available. (#1)
+- **User shell** -- replaced hardcoded `/bin/zsh` with `$SHELL` from environment (fallback to `/bin/zsh`).
+- **Scroll jitter** -- fixed viewport oscillation during rapid output (e.g. Claude Code responses) by auto-snapping to bottom when near the end of scrollback.
+- **Text selection with scroll** -- auto-scroll when dragging near viewport edges; selection cleared on manual scroll to prevent stale coordinates.
+
 ## [1.1.0] - 2026-03-11
 
 ### Added

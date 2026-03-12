@@ -57,6 +57,11 @@ public final class SwiftTermBackend: TerminalBackend {
             count: bytes.count
         ))
         _lock.lock()
+        // If user is at or near the bottom, auto-snap to bottom after feed.
+        // This prevents jitter from micro-scroll offsets during rapid output
+        // (e.g. Claude Code redrawing status lines and spinners).
+        let wasNearBottom = _scrollOffset <= 3
+
         // Reset yDisp to bottom before feeding so SwiftTerm operates on consistent state
         if _scrollOffset > 0 {
             terminal.buffer.yDisp = _bottomPosition
@@ -64,8 +69,12 @@ public final class SwiftTermBackend: TerminalBackend {
         terminal.feed(byteArray: array)
         // After feed(), yDisp == yBase (bottom). Capture it.
         _bottomPosition = terminal.buffer.yDisp
-        // Re-apply scroll offset so the renderer sees scrolled-back content
-        if _scrollOffset > 0 {
+
+        if wasNearBottom {
+            // Snap to bottom — user was following output
+            _scrollOffset = 0
+        } else if _scrollOffset > 0 {
+            // Re-apply scroll offset so the renderer sees scrolled-back content
             _scrollOffset = min(_scrollOffset, _bottomPosition)
             terminal.buffer.yDisp = max(0, _bottomPosition - _scrollOffset)
         }
