@@ -86,6 +86,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 projectStore: projectStore,
                 onJumpToSession: { [weak self] projectId, sessionId in
                     self?.jumpToSession(projectId: projectId, sessionId: sessionId)
+                },
+                onToggleActivityLog: { [weak self] in
+                    self?.toggleActivityLog()
+                },
+                onToggleFleetView: { [weak self] in
+                    self?.toggleFleetView()
                 }
             )
         )
@@ -153,6 +159,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                     } catch {
                         FileHandle.standardError.write("[Cosmodrome] Failed to restart session: \(error)\n".data(using: .utf8)!)
                     }
+                },
+                onToggleActivityLog: { [weak self] in
+                    self?.toggleActivityLog()
+                },
+                onToggleFleetView: { [weak self] in
+                    self?.toggleFleetView()
+                },
+                onToggleCommandPalette: { [weak self] in
+                    self?.showCommandPalette()
                 }
             )
         )
@@ -506,18 +521,62 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     private func showCommandPalette() {
         var actions: [PaletteAction] = []
 
-        // Project switching
-        for (i, project) in projectStore.projects.enumerated() {
+        // --- Attention (top priority) ---
+        let attentionSessions = projectStore.sessionsNeedingAttention
+        for entry in attentionSessions {
+            let state = entry.session.agentState == .needsInput ? "needs input" : "error"
             actions.append(PaletteAction(
-                "Switch to \(project.name)",
-                subtitle: "Project \(i + 1)",
-                icon: "folder"
+                "\(entry.project.name)/\(entry.session.name) — \(state)",
+                icon: "exclamationmark.triangle",
+                shortcut: "\u{2318}\u{21E7}N",
+                category: "Attention"
             ) { [weak self] in
-                self?.selectProject(id: project.id)
+                self?.jumpToSession(projectId: entry.project.id, sessionId: entry.session.id)
             })
         }
 
-        // Session switching (current project)
+        // --- Views ---
+        actions.append(PaletteAction(
+            activityLogVisible ? "Hide Activity Log" : "Show Activity Log",
+            icon: "list.bullet.rectangle",
+            shortcut: "\u{2318}L",
+            category: "Views"
+        ) { [weak self] in
+            self?.toggleActivityLog()
+        })
+
+        actions.append(PaletteAction(
+            fleetViewVisible ? "Hide Fleet Overview" : "Show Fleet Overview",
+            icon: "square.grid.2x2",
+            shortcut: "\u{2318}\u{21E7}F",
+            category: "Views"
+        ) { [weak self] in
+            self?.toggleFleetView()
+        })
+
+        actions.append(PaletteAction(
+            "Toggle Focus Mode",
+            icon: "rectangle.expand.vertical",
+            shortcut: "\u{2318}\u{21A9}",
+            category: "Views"
+        ) { [weak self] in
+            self?.terminalContentView.toggleFocus()
+        })
+
+        actions.append(PaletteAction(
+            "Dark Mode",
+            subtitle: isDarkTheme ? "Switch to light" : "Switch to dark",
+            icon: isDarkTheme ? "moon.fill" : "sun.max.fill",
+            category: "Views",
+            isToggle: true,
+            toggleState: isDarkTheme
+        ) { [weak self] in
+            guard let self else { return }
+            self.isDarkTheme.toggle()
+            self.applyTheme(self.isDarkTheme ? .dark : .light)
+        })
+
+        // --- Sessions ---
         if let project = projectStore.activeProject {
             for (i, session) in project.sessions.enumerated() {
                 let stateStr: String
@@ -527,40 +586,77 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 case .error: stateStr = " [error]"
                 case .inactive: stateStr = ""
                 }
+                let shortcut = i < 9 ? "\u{2318}\u{21E7}\(i + 1)" : nil
                 actions.append(PaletteAction(
                     "Focus \(session.name)\(stateStr)",
                     subtitle: "\(project.name) / Session \(i + 1)",
-                    icon: session.isAgent ? "cpu" : "terminal"
+                    icon: session.isAgent ? "cpu" : "terminal",
+                    shortcut: shortcut,
+                    category: "Sessions"
                 ) { [weak self] in
                     self?.focusSession(session.id)
                 })
             }
         }
 
-        // Theme toggle
         actions.append(PaletteAction(
-            "Dark Mode",
-            subtitle: isDarkTheme ? "Switch to light" : "Switch to dark",
-            icon: isDarkTheme ? "moon.fill" : "sun.max.fill",
-            isToggle: true,
-            toggleState: isDarkTheme
+            "New Shell Session",
+            icon: "plus.rectangle",
+            shortcut: "\u{2318}T",
+            category: "Sessions"
         ) { [weak self] in
-            guard let self else { return }
-            self.isDarkTheme.toggle()
-            self.applyTheme(self.isDarkTheme ? .dark : .light)
-        })
-
-        // New session / project
-        actions.append(PaletteAction("New Shell Session", subtitle: "Cmd+T", icon: "plus.rectangle") { [weak self] in
             if let project = self?.projectStore.activeProject {
                 self?.addSession(to: project)
             }
         })
-        actions.append(PaletteAction("New Project...", subtitle: "Cmd+Shift+T", icon: "folder.badge.plus") { [weak self] in
+
+        // Recording
+        if let focusedId = terminalContentView.focusedSessionId,
+           let session = projectStore.activeProject?.sessions.first(where: { $0.id == focusedId }) {
+            if sessionManager.isRecording(session: session) {
+                actions.append(PaletteAction(
+                    "Stop Recording: \(session.name)",
+                    icon: "stop.circle",
+                    category: "Sessions"
+                ) { [weak self] in
+                    self?.sessionManager.stopRecording(session: session)
+                })
+            } else if session.isRunning {
+                actions.append(PaletteAction(
+                    "Start Recording: \(session.name)",
+                    subtitle: "Save as asciicast v2 (.cast)",
+                    icon: "record.circle",
+                    category: "Sessions"
+                ) { [weak self] in
+                    self?.sessionManager.startRecording(session: session)
+                })
+            }
+        }
+
+        // --- Projects ---
+        for (i, project) in projectStore.projects.enumerated() {
+            let shortcut = i < 9 ? "\u{2318}\(i + 1)" : nil
+            actions.append(PaletteAction(
+                "Switch to \(project.name)",
+                subtitle: "\(project.sessions.count) sessions",
+                icon: "folder",
+                shortcut: shortcut,
+                category: "Projects"
+            ) { [weak self] in
+                self?.selectProject(id: project.id)
+            })
+        }
+
+        actions.append(PaletteAction(
+            "New Project...",
+            icon: "folder.badge.plus",
+            shortcut: "\u{2318}\u{21E7}T",
+            category: "Projects"
+        ) { [weak self] in
             self?.addNewProject()
         })
 
-        // Framework-detected dev server actions
+        // --- Dev Servers (framework-detected) ---
         if let project = projectStore.activeProject, let rootPath = project.rootPath {
             let detector = FrameworkDetector()
             let frameworks = detector.detect(in: rootPath)
@@ -568,7 +664,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 actions.append(PaletteAction(
                     "Start \(fw.name)",
                     subtitle: ([fw.command] + fw.arguments).joined(separator: " "),
-                    icon: "play.fill"
+                    icon: "play.fill",
+                    category: "Dev Servers"
                 ) { [weak self] in
                     guard let self else { return }
                     let session = Session(
@@ -585,62 +682,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 })
             }
         }
-
-        // Jump to attention
-        let attentionSessions = projectStore.sessionsNeedingAttention
-        for entry in attentionSessions {
-            let state = entry.session.agentState == .needsInput ? "needs input" : "error"
-            actions.append(PaletteAction(
-                "\(entry.project.name)/\(entry.session.name) — \(state)",
-                icon: "exclamationmark.triangle"
-            ) { [weak self] in
-                self?.jumpToSession(projectId: entry.project.id, sessionId: entry.session.id)
-            })
-        }
-
-        // Recording
-        if let focusedId = terminalContentView.focusedSessionId,
-           let session = projectStore.activeProject?.sessions.first(where: { $0.id == focusedId }) {
-            if sessionManager.isRecording(session: session) {
-                actions.append(PaletteAction(
-                    "Stop Recording: \(session.name)",
-                    icon: "stop.circle"
-                ) { [weak self] in
-                    self?.sessionManager.stopRecording(session: session)
-                })
-            } else if session.isRunning {
-                actions.append(PaletteAction(
-                    "Start Recording: \(session.name)",
-                    subtitle: "Save as asciicast v2 (.cast)",
-                    icon: "record.circle"
-                ) { [weak self] in
-                    self?.sessionManager.startRecording(session: session)
-                })
-            }
-        }
-
-        // Layout toggle
-        actions.append(PaletteAction("Toggle Focus Mode", icon: "rectangle.expand.vertical") { [weak self] in
-            self?.terminalContentView.toggleFocus()
-        })
-
-        // Activity log
-        actions.append(PaletteAction(
-            activityLogVisible ? "Hide Activity Log" : "Show Activity Log",
-            subtitle: "Cmd+L",
-            icon: "list.bullet.rectangle"
-        ) { [weak self] in
-            self?.toggleActivityLog()
-        })
-
-        // Fleet overview
-        actions.append(PaletteAction(
-            fleetViewVisible ? "Hide Fleet Overview" : "Show Fleet Overview",
-            subtitle: "Cmd+Shift+F",
-            icon: "square.grid.3x3.topleft.filled"
-        ) { [weak self] in
-            self?.toggleFleetView()
-        })
 
         paletteOverlay?.isHidden = false
         paletteState.show(actions: actions)

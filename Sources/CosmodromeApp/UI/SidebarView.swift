@@ -10,6 +10,9 @@ struct SidebarView: View {
     var onDeleteProject: (UUID) -> Void
     var onCloseSession: (UUID) -> Void
     var onRestartSession: (UUID) -> Void
+    var onToggleActivityLog: () -> Void
+    var onToggleFleetView: () -> Void
+    var onToggleCommandPalette: () -> Void
 
     @State private var expandedProjectIds: Set<UUID> = []
     @State private var didInitExpanded = false
@@ -104,6 +107,15 @@ struct SidebarView: View {
                 .padding(.horizontal, Spacing.sm)
                 .padding(.top, Spacing.xs)
             }
+
+            // Bottom toolbar
+            Divider().opacity(0.3)
+
+            SidebarToolbar(
+                onToggleActivityLog: onToggleActivityLog,
+                onToggleFleetView: onToggleFleetView,
+                onToggleCommandPalette: onToggleCommandPalette
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(DS.bgSidebar)
@@ -118,6 +130,69 @@ struct SidebarView: View {
                 didInitExpanded = true
             }
         }
+    }
+}
+
+// MARK: - Sidebar Toolbar
+
+private struct SidebarToolbar: View {
+    var onToggleActivityLog: () -> Void
+    var onToggleFleetView: () -> Void
+    var onToggleCommandPalette: () -> Void
+
+    var body: some View {
+        HStack(spacing: Spacing.xs) {
+            SidebarToolbarButton(
+                icon: "list.bullet.rectangle",
+                label: "Activity Log",
+                shortcut: "\u{2318}L",
+                action: onToggleActivityLog
+            )
+
+            SidebarToolbarButton(
+                icon: "square.grid.2x2",
+                label: "Fleet Overview",
+                shortcut: "\u{2318}\u{21E7}F",
+                action: onToggleFleetView
+            )
+
+            Spacer()
+
+            SidebarToolbarButton(
+                icon: "magnifyingglass",
+                label: "Command Palette",
+                shortcut: "\u{2318}P",
+                action: onToggleCommandPalette
+            )
+        }
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, Spacing.sm)
+    }
+}
+
+private struct SidebarToolbarButton: View {
+    let icon: String
+    let label: String
+    let shortcut: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundColor(isHovered ? DS.textPrimary : DS.textTertiary)
+                .frame(width: 26, height: 22)
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.sm)
+                .fill(isHovered ? DS.bgHover : Color.clear)
+                .animation(Anim.quick, value: isHovered)
+        )
+        .onHover { isHovered = $0 }
+        .help("\(label)  \(shortcut)")
     }
 }
 

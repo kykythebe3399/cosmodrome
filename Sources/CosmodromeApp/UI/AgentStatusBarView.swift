@@ -4,6 +4,8 @@ import SwiftUI
 struct AgentStatusBarView: View {
     @Bindable var projectStore: ProjectStore
     var onJumpToSession: (UUID, UUID) -> Void
+    var onToggleActivityLog: () -> Void
+    var onToggleFleetView: () -> Void
 
     var body: some View {
         HStack(spacing: Spacing.md) {
@@ -60,6 +62,19 @@ struct AgentStatusBarView: View {
             Text("\(totalSessionCount) sessions")
                 .font(Typo.body)
                 .foregroundColor(DS.textTertiary)
+
+            // Quick action buttons
+            Divider()
+                .frame(height: 14)
+                .opacity(0.3)
+
+            StatusBarButton(icon: "list.bullet.rectangle", label: "Activity Log", shortcut: "\u{2318}L") {
+                onToggleActivityLog()
+            }
+
+            StatusBarButton(icon: "square.grid.2x2", label: "Fleet Overview", shortcut: "\u{2318}\u{21E7}F") {
+                onToggleFleetView()
+            }
         }
         .padding(.horizontal, Spacing.md)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -108,6 +123,33 @@ struct AgentStatusBarView: View {
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
         .background(Capsule().fill(color.opacity(0.12)))
+    }
+}
+
+private struct StatusBarButton: View {
+    let icon: String
+    let label: String
+    let shortcut: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundColor(isHovered ? DS.textPrimary : DS.textTertiary)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.sm)
+                .fill(isHovered ? DS.bgHover : Color.clear)
+                .animation(Anim.quick, value: isHovered)
+        )
+        .onHover { isHovered = $0 }
+        .help("\(label)  \(shortcut)")
     }
 }
 
