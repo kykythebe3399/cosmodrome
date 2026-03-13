@@ -54,7 +54,7 @@ final class ThemeState {
     func apply(_ theme: Theme) {
         if let bg = parseHexColor(theme.colors.background) {
             background = NSColor(red: CGFloat(bg.r), green: CGFloat(bg.g), blue: CGFloat(bg.b), alpha: 1)
-            isDark = (bg.r * 0.299 + bg.g * 0.587 + bg.b * 0.114) <= 0.5
+            isDark = !isLightBackground(r: bg.r, g: bg.g, b: bg.b)
         }
         if let fg = parseHexColor(theme.colors.foreground) {
             foreground = NSColor(red: CGFloat(fg.r), green: CGFloat(fg.g), blue: CGFloat(fg.b), alpha: 1)

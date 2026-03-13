@@ -702,7 +702,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             red: CGFloat(bg.r), green: CGFloat(bg.g), blue: CGFloat(bg.b), alpha: 1.0
         )
         // Sync window chrome with theme — detect light vs dark by background luminance
-        let isLight = bg.r * 0.299 + bg.g * 0.587 + bg.b * 0.114 > 0.5
+        let isLight = isLightBackground(r: bg.r, g: bg.g, b: bg.b)
         window?.appearance = NSAppearance(named: isLight ? .aqua : .darkAqua)
         // Refresh CALayer overlays (they use resolved CGColors, not dynamic)
         terminalContentView.updateLayout()
@@ -722,15 +722,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     private static func resolveTheme(named name: String?) -> Theme? {
         guard let name, name != "dark", name != "light" else { return nil }
 
-        // Check bundled themes in the app's Resources/Themes/
         if let bundleURL = Bundle.main.url(forResource: name, withExtension: "yml", subdirectory: "Themes") {
-            return try? ConfigParser().parseTheme(at: bundleURL.path)
+            do {
+                return try ConfigParser().parseTheme(at: bundleURL.path)
+            } catch {
+                FileHandle.standardError.write(
+                    "[Cosmodrome] Failed to load theme '\(name)': \(error)\n".data(using: .utf8)!
+                )
+            }
         }
 
-        // Check user themes directory
         let userThemePath = NSString(string: "~/.config/cosmodrome/themes/\(name).yml").expandingTildeInPath
         if FileManager.default.fileExists(atPath: userThemePath) {
-            return try? ConfigParser().parseTheme(at: userThemePath)
+            do {
+                return try ConfigParser().parseTheme(at: userThemePath)
+            } catch {
+                FileHandle.standardError.write(
+                    "[Cosmodrome] Failed to load user theme '\(name)': \(error)\n".data(using: .utf8)!
+                )
+            }
         }
 
         return nil
