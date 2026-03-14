@@ -27,11 +27,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     private var splitView: NSSplitView!
     private var activityLogSidebarHost: NSHostingView<AnyView>?
     private var activityLogExpanded = false
+    private let userConfig: UserConfig?
 
     /// User's preferred shell from $SHELL, falling back to /bin/zsh.
     private static let defaultShell: String = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
 
     init() {
+        self.userConfig = Self.loadUserConfig()
         // Clear any saved frame from previous broken runs
         NSWindow.removeFrame(usingName: "CosmodromeMain")
 
@@ -178,11 +180,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         sidebarHost.frame = NSRect(x: 0, y: 0, width: 200, height: splitFrame.height)
 
         // Terminal content (fills remaining width)
-        terminalContentView = TerminalContentView(frame: NSRect(
-            x: 0, y: 0,
-            width: splitFrame.width - 201,
-            height: splitFrame.height
-        ))
+        terminalContentView = TerminalContentView(
+            frame: NSRect(x: 0, y: 0, width: splitFrame.width - 201, height: splitFrame.height),
+            userConfig: userConfig
+        )
         terminalContentView.wantsLayer = true
 
         splitView.addArrangedSubview(sidebarHost)
@@ -310,8 +311,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 projectStore.setActiveProject(id: activeId)
             }
 
-            // Restore font size
-            if let savedSize = state.fontSize {
+            // Restore font size (only if user config doesn't specify one)
+            if userConfig?.font?.size == nil, let savedSize = state.fontSize {
                 terminalContentView.setFontSize(CGFloat(savedSize))
             }
             syncFontSizeState()
@@ -837,6 +838,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         if event.keyCode == 49 && event.modifierFlags.contains(.control) {
             keybindingManager.toggleMode()
             return true
+        }
+
+        // Let Cmd+Q pass through to the menu system for app termination
+        if event.modifierFlags.contains(.command) && event.keyCode == 12 { // 'q'
+            return false
         }
 
         guard let action = keybindingManager.match(event: event) else {
@@ -1659,5 +1665,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 sessionManager.stopSession(session)
             }
         }
+    }
+
+    private static func loadUserConfig() -> UserConfig? {
+        let path = NSString(string: "~/.config/cosmodrome/config.yml").expandingTildeInPath
+        return try? ConfigParser().parseUserConfig(at: path)
     }
 }
