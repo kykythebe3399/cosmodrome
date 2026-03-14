@@ -29,13 +29,6 @@ final class MCPBridge: MCPServerDelegate {
             }
             let lastN = arguments["last_n_lines"] as? Int
             return getSessionContent(sessionId: uuid, lastNLines: lastN)
-        case "send_input":
-            guard let sessionId = arguments["session_id"] as? String,
-                  let uuid = UUID(uuidString: sessionId),
-                  let text = arguments["text"] as? String else {
-                return .failure(MCPBridgeError.invalidArgument("session_id or text"))
-            }
-            return sendInput(sessionId: uuid, text: text)
         case "get_agent_states":
             return getAgentStates()
         case "focus_session":
@@ -130,31 +123,6 @@ final class MCPBridge: MCPServerDelegate {
         }
 
         return .success(lines.joined(separator: "\n"))
-    }
-
-    private func sendInput(sessionId: UUID, text: String) -> Result<String, Error> {
-        guard let session = findSession(id: sessionId) else {
-            return .failure(MCPBridgeError.sessionNotFound(sessionId))
-        }
-        guard session.isRunning else {
-            return .failure(MCPBridgeError.sessionNotRunning(sessionId))
-        }
-
-        // Replace escape sequences
-        let processed = text
-            .replacingOccurrences(of: "\\n", with: "\n")
-            .replacingOccurrences(of: "\\r", with: "\r")
-            .replacingOccurrences(of: "\\t", with: "\t")
-
-        if let data = processed.data(using: .utf8) {
-            sessionManager?.write(to: session, data: data)
-
-            // Record input if recording
-            if let recorder = recorders[session.id] {
-                recorder.recordInput(data)
-            }
-        }
-        return .success("Input sent.")
     }
 
     private func getAgentStates() -> Result<String, Error> {

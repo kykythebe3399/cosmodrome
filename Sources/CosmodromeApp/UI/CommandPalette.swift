@@ -8,18 +8,26 @@ struct PaletteAction: Identifiable {
     let title: String
     let subtitle: String?
     let icon: String
+    let shortcut: String?
+    let category: String?
     let isToggle: Bool
     let toggleState: Bool
+    let stateColor: Color?
     let action: () -> Void
 
     init(_ title: String, subtitle: String? = nil, icon: String = "terminal",
+         shortcut: String? = nil, category: String? = nil,
          isToggle: Bool = false, toggleState: Bool = false,
+         stateColor: Color? = nil,
          action: @escaping () -> Void) {
         self.title = title
         self.subtitle = subtitle
         self.icon = icon
+        self.shortcut = shortcut
+        self.category = category
         self.isToggle = isToggle
         self.toggleState = toggleState
+        self.stateColor = stateColor
         self.action = action
     }
 }
@@ -127,7 +135,15 @@ struct CommandPaletteView: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(spacing: 0) {
-                                ForEach(Array(state.filteredActions.enumerated()), id: \.element.id) { index, action in
+                                let items = state.filteredActions
+                                ForEach(Array(items.enumerated()), id: \.element.id) { index, action in
+                                    // Category header (show when category changes and query is empty)
+                                    if state.query.isEmpty,
+                                       let cat = action.category,
+                                       (index == 0 || items[index - 1].category != cat) {
+                                        PaletteSectionHeader(title: cat)
+                                    }
+
                                     PaletteRow(
                                         action: action,
                                         isSelected: index == state.selectedIndex
@@ -140,7 +156,7 @@ struct CommandPaletteView: View {
                                 }
                             }
                         }
-                        .frame(maxHeight: 360)
+                        .frame(maxHeight: 400)
                         .onChange(of: state.selectedIndex) { _, newIndex in
                             let items = state.filteredActions
                             if newIndex >= 0 && newIndex < items.count {
@@ -192,6 +208,25 @@ struct CommandPaletteView: View {
     }
 }
 
+private struct PaletteSectionHeader: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: Spacing.sm) {
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .semibold, design: .default))
+                .foregroundColor(DS.textTertiary)
+                .tracking(0.8)
+            Rectangle()
+                .fill(DS.borderSubtle)
+                .frame(height: 1)
+        }
+        .padding(.horizontal, Spacing.xl)
+        .padding(.top, Spacing.md)
+        .padding(.bottom, Spacing.xs)
+    }
+}
+
 private struct PaletteRow: View {
     let action: PaletteAction
     let isSelected: Bool
@@ -200,10 +235,19 @@ private struct PaletteRow: View {
 
     var body: some View {
         HStack(spacing: Spacing.md) {
-            Image(systemName: action.icon)
-                .font(Typo.callout)
-                .foregroundColor(isSelected ? DS.textPrimary : DS.textTertiary)
-                .frame(width: 20)
+            ZStack {
+                Image(systemName: action.icon)
+                    .font(Typo.callout)
+                    .foregroundColor(isSelected ? DS.textPrimary : DS.textTertiary)
+                    .frame(width: 20)
+
+                if let color = action.stateColor {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 6, height: 6)
+                        .offset(x: 8, y: -6)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(action.title)
@@ -222,15 +266,19 @@ private struct PaletteRow: View {
             if action.isToggle {
                 togglePill(isOn: action.toggleState)
             }
+
+            if let shortcut = action.shortcut {
+                shortcutBadge(shortcut)
+            }
         }
         .padding(.horizontal, Spacing.xl)
         .padding(.vertical, Spacing.sm)
         .background(
-            RoundedRectangle(cornerRadius: Radius.sm)
+            RoundedRectangle(cornerRadius: Radius.md)
                 .fill(isSelected ? DS.bgSelected : (isHovered ? DS.bgHover : Color.clear))
                 .animation(Anim.quick, value: isSelected)
                 .animation(Anim.quick, value: isHovered)
-                .padding(.horizontal, Spacing.xs)
+                .padding(.horizontal, Spacing.sm)
         )
         .onHover { isHovered = $0 }
     }
@@ -244,6 +292,19 @@ private struct PaletteRow: View {
             .padding(.vertical, 3)
             .background(
                 Capsule().fill(isOn ? DS.accentSubtle : DS.bgHover)
+            )
+    }
+
+    @ViewBuilder
+    private func shortcutBadge(_ shortcut: String) -> some View {
+        Text(shortcut)
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .foregroundColor(DS.textTertiary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(DS.bgHover)
             )
     }
 }

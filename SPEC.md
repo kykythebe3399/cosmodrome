@@ -1,6 +1,6 @@
 # Technical Specification: Cosmodrome
 
-**Version:** 1.1  
+**Version:** 0.1.0
 **Date:** March 2026
 
 ---
@@ -1224,21 +1224,19 @@ Deliverable: Alpha to 20-50 testers.
   □ Theme support (dark + light + custom)
   □ Session thumbnails (low-fps preview)
   □ Command palette
-  □ Git worktree integration
 
 Deliverable: Public beta.
 ```
 
-### Phase 3: v1.0 (Weeks 19-26)
+### Phase 3 (Weeks 19-26)
 
 ```
   □ MCP server
   □ Session recording (asciicast)
-  □ Linux port
   □ Homebrew distribution
   □ Documentation
 
-Deliverable: v1.0 release.
+Deliverable: v0.1.0 release.
 ```
 
 ---

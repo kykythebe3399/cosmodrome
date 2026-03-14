@@ -62,9 +62,17 @@ Deep integration with Claude Code via structured hooks. Cosmodrome receives real
 
 Detects which LLM model each agent is using (Opus, Sonnet, GPT-4, etc.) and displays it in the status bar.
 
+### Session Narrative
+
+Raw state labels are replaced with contextual descriptions everywhere in the UI. "Working" becomes "Editing auth module -- 8 files, 2m". "Error" becomes "Stuck: compile error (5x, 3m)". "Inactive" becomes "Done. 15 files, tests passing, 23 min, $4.20." Built from heuristics -- zero LLM calls, zero latency, works offline.
+
+### Stuck Detection
+
+When an agent is stuck in an error-retry loop (3+ cycles), Cosmodrome surfaces it as "stuck" with retry count and duration instead of showing a misleading "working" state. The developer knows immediately that intervention is needed.
+
 ### Completion Actions
 
-When an agent finishes a task, Cosmodrome suggests next steps -- "Open diff", "Run tests", "Start review agent" -- without ever auto-triggering them.
+When an agent finishes a task, Cosmodrome shows a rich summary ("Editing auth module. 15 files, tests passing, 5m, $4.20.") and suggests context-aware next steps -- "Open diff", "Re-run tests (were failing)", "Start review agent" -- without ever auto-triggering them.
 
 ### Session Recording
 
@@ -72,7 +80,7 @@ Record terminal sessions in asciicast v2 format for playback and sharing.
 
 ### MCP Server
 
-JSON-RPC 2.0 server over stdio for programmatic control: list projects, query agent states, send input, start recordings, get fleet stats, get activity log.
+JSON-RPC 2.0 server over stdio for programmatic observation: list projects, query agent states, read terminal content, get fleet stats, get activity log.
 
 ### CLI Control Plane
 
@@ -83,12 +91,15 @@ JSON-RPC 2.0 server over stdio for programmatic control: list projects, query ag
 - **Command palette** (`Cmd+P`) for quick access to all actions
 - **Modal keybindings** with vim-style command mode (`Ctrl+Space`)
 - **Theme system** with dark, light, and custom YAML themes
-- **Git worktree integration** for multi-branch workflows
 - **OSC 133 semantic prompt tracking** for shell integration
 - **Session persistence** with scrollback restoration across restarts
 - **Native macOS notifications** for agent state changes
 - **Grid and Focus layout modes** -- grid for overview, focus for deep work
 - **Font zoom** (`Cmd+=`/`Cmd+-`) with persistence
+
+### Philosophy
+
+**Observe, never orchestrate.** Cosmodrome watches what your agents do and tells you what happened. It never sends input to agents, never auto-triggers actions, and never controls agent behavior. The developer is always in the loop.
 
 ---
 
@@ -203,8 +214,6 @@ cosmoctl status
 cosmoctl list-projects
 cosmoctl list-sessions
 cosmoctl focus <session-id>
-cosmoctl send <session-id> "npm test"
-cosmoctl new-session --project <id> --name "Claude" --command "claude" --agent
 cosmoctl content <session-id> --lines 50
 
 # Fleet and activity
@@ -222,7 +231,6 @@ When launched with `--mcp`, Cosmodrome exposes these tools via JSON-RPC 2.0 over
 | `list_projects` | List all projects with agent states |
 | `list_sessions` | List sessions for a project |
 | `get_session_content` | Get visible terminal content |
-| `send_input` | Send keyboard input to a session |
 | `get_agent_states` | All agent states across all projects |
 | `focus_session` | Switch focus to a session |
 | `start_recording` / `stop_recording` | Asciicast session recording |

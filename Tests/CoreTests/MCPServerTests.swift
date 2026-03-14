@@ -11,7 +11,6 @@ final class MCPServerTests: XCTestCase {
         XCTAssertTrue(names.contains("list_projects"))
         XCTAssertTrue(names.contains("list_sessions"))
         XCTAssertTrue(names.contains("get_session_content"))
-        XCTAssertTrue(names.contains("send_input"))
         XCTAssertTrue(names.contains("get_agent_states"))
         XCTAssertTrue(names.contains("focus_session"))
         XCTAssertTrue(names.contains("start_recording"))
@@ -35,17 +34,16 @@ final class MCPServerTests: XCTestCase {
     }
 
     func testToolCount() {
-        XCTAssertEqual(MCPServer.toolDefinitions.count, 8)
+        XCTAssertEqual(MCPServer.toolDefinitions.count, 9)
     }
 
     func testRequiredParameters() {
         let tools = MCPServer.toolDefinitions
-        let sendInput = tools.first { $0["name"] as? String == "send_input" }!
-        let schema = sendInput["inputSchema"] as! [String: Any]
+        let getContent = tools.first { $0["name"] as? String == "get_session_content" }!
+        let schema = getContent["inputSchema"] as! [String: Any]
         let required = schema["required"] as? [String]
         XCTAssertNotNil(required)
         XCTAssertTrue(required!.contains("session_id"))
-        XCTAssertTrue(required!.contains("text"))
     }
 
     func testServerInitialization() {

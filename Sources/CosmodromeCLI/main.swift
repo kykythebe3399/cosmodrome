@@ -7,8 +7,6 @@ import Foundation
 //   cosmodrome-cli list-projects
 //   cosmodrome-cli list-sessions [--project <id>]
 //   cosmodrome-cli focus <session-id>
-//   cosmodrome-cli send <session-id> <text>
-//   cosmodrome-cli new-session [--project <id>] [--name <name>] [--command <cmd>] [--agent]
 //   cosmodrome-cli content <session-id> [--lines <n>]
 
 let args = CommandLine.arguments
@@ -54,28 +52,6 @@ case "focus":
         exit(1)
     }
     requestArgs["session_id"] = args[2]
-
-case "send":
-    guard args.count >= 4 else {
-        printError("Usage: cosmodrome-cli send <session-id> <text>")
-        exit(1)
-    }
-    requestArgs["session_id"] = args[2]
-    requestArgs["text"] = args[3...].joined(separator: " ")
-
-case "new-session":
-    if let idx = args.firstIndex(of: "--project"), idx + 1 < args.count {
-        requestArgs["project_id"] = args[idx + 1]
-    }
-    if let idx = args.firstIndex(of: "--name"), idx + 1 < args.count {
-        requestArgs["name"] = args[idx + 1]
-    }
-    if let idx = args.firstIndex(of: "--command"), idx + 1 < args.count {
-        requestArgs["command"] = args[idx + 1]
-    }
-    if args.contains("--agent") {
-        requestArgs["agent"] = "true"
-    }
 
 case "content":
     guard args.count >= 3 else {
@@ -201,12 +177,6 @@ func printUsage() {
       list-projects                 List all projects
       list-sessions [--project ID]  List sessions (default: active project)
       focus <session-id>            Focus a specific session
-      send <session-id> <text>      Send input to a session
-      new-session [options]         Create a new session
-        --project ID                  Target project (default: active)
-        --name NAME                   Session name (default: Shell)
-        --command CMD                 Command to run (default: $SHELL)
-        --agent                       Mark as agent session
       content <session-id>          Get terminal content
         --lines N                     Last N lines only
       fleet-stats                   Show fleet-wide agent statistics

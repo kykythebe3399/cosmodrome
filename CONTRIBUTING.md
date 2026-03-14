@@ -121,6 +121,7 @@ Do not add a dependency for something achievable in under 100 lines of Swift. If
 - **Descriptive title.** Summarize what the PR does, not how.
 - **Test new logic.** If you add or change behavior in `Core/`, add or update tests.
 - **No breaking changes without discussion.** Open an issue first if your change affects the public API or architecture.
+- **No write operations to agent PTYs.** Cosmodrome observes agents but never sends input to them. Do not add MCP tools, CLI commands, or UI features that write to a session's PTY.
 - **Profile performance-sensitive changes.** Include before/after numbers if your change touches the render path, I/O path, or any hot loop.
 
 ## Reporting Issues

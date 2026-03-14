@@ -67,7 +67,10 @@ final class GlyphAtlas {
         )
         desc.usage = [.shaderRead]
         desc.storageMode = .shared
-        return device.makeTexture(descriptor: desc)!
+        guard let texture = device.makeTexture(descriptor: desc) else {
+            fatalError("[GlyphAtlas] Failed to create \(atlasSize)x\(atlasSize) atlas texture")
+        }
+        return texture
     }
 
     private func rasterize(_ key: GlyphKey) -> GlyphEntry {

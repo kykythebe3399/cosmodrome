@@ -24,11 +24,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     private var appearanceObserver: NSObjectProtocol?
     private var fleetOverlayHost: NSHostingView<FleetOverviewView>?
     private var fleetViewVisible = false
+    private var splitView: NSSplitView!
+    private var activityLogSidebarHost: NSHostingView<AnyView>?
+    private var activityLogExpanded = false
+    private let userConfig: UserConfig?
 
     /// User's preferred shell from $SHELL, falling back to /bin/zsh.
     private static let defaultShell: String = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
 
     init() {
+        self.userConfig = Self.loadUserConfig()
         // Clear any saved frame from previous broken runs
         NSWindow.removeFrame(usingName: "CosmodromeMain")
 
@@ -86,6 +91,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 projectStore: projectStore,
                 onJumpToSession: { [weak self] projectId, sessionId in
                     self?.jumpToSession(projectId: projectId, sessionId: sessionId)
+                },
+                onToggleActivityLog: { [weak self] in
+                    self?.toggleActivityLog()
+                },
+                onToggleFleetView: { [weak self] in
+                    self?.toggleFleetView()
                 }
             )
         )
@@ -100,6 +111,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             height: contentRect.height - statusBarHeight
         )
         let splitView = NSSplitView(frame: splitFrame)
+        self.splitView = splitView
         splitView.isVertical = true
         splitView.dividerStyle = .thin
         splitView.autoresizingMask = [.width, .height]
@@ -153,17 +165,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                     } catch {
                         FileHandle.standardError.write("[Cosmodrome] Failed to restart session: \(error)\n".data(using: .utf8)!)
                     }
+                },
+                onToggleActivityLog: { [weak self] in
+                    self?.toggleActivityLog()
+                },
+                onToggleFleetView: { [weak self] in
+                    self?.toggleFleetView()
+                },
+                onToggleCommandPalette: { [weak self] in
+                    self?.showCommandPalette()
                 }
             )
         )
         sidebarHost.frame = NSRect(x: 0, y: 0, width: 200, height: splitFrame.height)
 
         // Terminal content (fills remaining width)
-        terminalContentView = TerminalContentView(frame: NSRect(
-            x: 0, y: 0,
-            width: splitFrame.width - 201,
-            height: splitFrame.height
-        ))
+        terminalContentView = TerminalContentView(
+            frame: NSRect(x: 0, y: 0, width: splitFrame.width - 201, height: splitFrame.height),
+            userConfig: userConfig
+        )
         terminalContentView.wantsLayer = true
 
         splitView.addArrangedSubview(sidebarHost)
@@ -283,8 +303,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 projectStore.setActiveProject(id: activeId)
             }
 
-            // Restore font size
-            if let savedSize = state.fontSize {
+            // Restore font size (only if user config doesn't specify one)
+            if userConfig?.font?.size == nil, let savedSize = state.fontSize {
                 terminalContentView.setFontSize(CGFloat(savedSize))
             }
             syncFontSizeState()
@@ -506,42 +526,62 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     private func showCommandPalette() {
         var actions: [PaletteAction] = []
 
-        // Project switching
-        for (i, project) in projectStore.projects.enumerated() {
+        // --- Attention (top priority) ---
+        let attentionSessions = projectStore.sessionsNeedingAttention
+        for entry in attentionSessions {
+            let state = entry.session.agentState == .needsInput ? "needs input" : "error"
             actions.append(PaletteAction(
-                "Switch to \(project.name)",
-                subtitle: "Project \(i + 1)",
-                icon: "folder"
+                "\(entry.project.name)/\(entry.session.name) — \(state)",
+                icon: "exclamationmark.triangle",
+                shortcut: "\u{2318}\u{21E7}N",
+                category: "Attention"
             ) { [weak self] in
-                self?.selectProject(id: project.id)
+                self?.jumpToSession(projectId: entry.project.id, sessionId: entry.session.id)
             })
         }
 
-        // Session switching (current project)
-        if let project = projectStore.activeProject {
-            for (i, session) in project.sessions.enumerated() {
-                let stateStr: String
-                switch session.agentState {
-                case .working: stateStr = " [working]"
-                case .needsInput: stateStr = " [needs input]"
-                case .error: stateStr = " [error]"
-                case .inactive: stateStr = ""
-                }
-                actions.append(PaletteAction(
-                    "Focus \(session.name)\(stateStr)",
-                    subtitle: "\(project.name) / Session \(i + 1)",
-                    icon: session.isAgent ? "cpu" : "terminal"
-                ) { [weak self] in
-                    self?.focusSession(session.id)
-                })
-            }
-        }
+        // --- Views ---
+        actions.append(PaletteAction(
+            activityLogVisible ? "Hide Activity Log" : "Show Activity Log",
+            icon: "list.bullet.rectangle",
+            shortcut: "\u{2318}L",
+            category: "Views"
+        ) { [weak self] in
+            self?.toggleActivityLog()
+        })
 
-        // Theme toggle
+        actions.append(PaletteAction(
+            activityLogExpanded ? "Close Activity Log Overlay" : "Expand Activity Log",
+            icon: "list.bullet.rectangle.portrait",
+            shortcut: "\u{2318}\u{21E7}L",
+            category: "Views"
+        ) { [weak self] in
+            self?.expandActivityLog()
+        })
+
+        actions.append(PaletteAction(
+            fleetViewVisible ? "Hide Fleet Overview" : "Show Fleet Overview",
+            icon: "square.grid.2x2",
+            shortcut: "\u{2318}\u{21E7}F",
+            category: "Views"
+        ) { [weak self] in
+            self?.toggleFleetView()
+        })
+
+        actions.append(PaletteAction(
+            "Toggle Focus Mode",
+            icon: "rectangle.expand.vertical",
+            shortcut: "\u{2318}\u{21A9}",
+            category: "Views"
+        ) { [weak self] in
+            self?.terminalContentView.toggleFocus()
+        })
+
         actions.append(PaletteAction(
             "Dark Mode",
             subtitle: isDarkTheme ? "Switch to light" : "Switch to dark",
             icon: isDarkTheme ? "moon.fill" : "sun.max.fill",
+            category: "Views",
             isToggle: true,
             toggleState: isDarkTheme
         ) { [weak self] in
@@ -550,17 +590,84 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             self.applyTheme(self.isDarkTheme ? .dark : .light)
         })
 
-        // New session / project
-        actions.append(PaletteAction("New Shell Session", subtitle: "Cmd+T", icon: "plus.rectangle") { [weak self] in
+        // --- Sessions ---
+        if let project = projectStore.activeProject {
+            for (i, session) in project.sessions.enumerated() {
+                let sessionStateColor: Color? = session.isAgent && session.agentState != .inactive
+                    ? DS.stateColor(for: session.agentState)
+                    : nil
+                let shortcut = i < 9 ? "\u{2318}\u{21E7}\(i + 1)" : nil
+                actions.append(PaletteAction(
+                    "Focus \(session.name)",
+                    subtitle: "\(project.name) / Session \(i + 1)",
+                    icon: session.isAgent ? "cpu" : "terminal",
+                    shortcut: shortcut,
+                    category: "Sessions",
+                    stateColor: sessionStateColor
+                ) { [weak self] in
+                    self?.focusSession(session.id)
+                })
+            }
+        }
+
+        actions.append(PaletteAction(
+            "New Shell Session",
+            icon: "plus.rectangle",
+            shortcut: "\u{2318}T",
+            category: "Sessions"
+        ) { [weak self] in
             if let project = self?.projectStore.activeProject {
                 self?.addSession(to: project)
             }
         })
-        actions.append(PaletteAction("New Project...", subtitle: "Cmd+Shift+T", icon: "folder.badge.plus") { [weak self] in
+
+        // Recording
+        if let focusedId = terminalContentView.focusedSessionId,
+           let session = projectStore.activeProject?.sessions.first(where: { $0.id == focusedId }) {
+            if sessionManager.isRecording(session: session) {
+                actions.append(PaletteAction(
+                    "Stop Recording: \(session.name)",
+                    icon: "stop.circle",
+                    category: "Sessions"
+                ) { [weak self] in
+                    self?.sessionManager.stopRecording(session: session)
+                })
+            } else if session.isRunning {
+                actions.append(PaletteAction(
+                    "Start Recording: \(session.name)",
+                    subtitle: "Save as asciicast v2 (.cast)",
+                    icon: "record.circle",
+                    category: "Sessions"
+                ) { [weak self] in
+                    self?.sessionManager.startRecording(session: session)
+                })
+            }
+        }
+
+        // --- Projects ---
+        for (i, project) in projectStore.projects.enumerated() {
+            let shortcut = i < 9 ? "\u{2318}\(i + 1)" : nil
+            actions.append(PaletteAction(
+                "Switch to \(project.name)",
+                subtitle: "\(project.sessions.count) sessions",
+                icon: "folder",
+                shortcut: shortcut,
+                category: "Projects"
+            ) { [weak self] in
+                self?.selectProject(id: project.id)
+            })
+        }
+
+        actions.append(PaletteAction(
+            "New Project...",
+            icon: "folder.badge.plus",
+            shortcut: "\u{2318}\u{21E7}T",
+            category: "Projects"
+        ) { [weak self] in
             self?.addNewProject()
         })
 
-        // Framework-detected dev server actions
+        // --- Dev Servers (framework-detected) ---
         if let project = projectStore.activeProject, let rootPath = project.rootPath {
             let detector = FrameworkDetector()
             let frameworks = detector.detect(in: rootPath)
@@ -568,7 +675,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 actions.append(PaletteAction(
                     "Start \(fw.name)",
                     subtitle: ([fw.command] + fw.arguments).joined(separator: " "),
-                    icon: "play.fill"
+                    icon: "play.fill",
+                    category: "Dev Servers"
                 ) { [weak self] in
                     guard let self else { return }
                     let session = Session(
@@ -585,96 +693,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 })
             }
         }
-
-        // Git worktree actions (if current project is in a git repo)
-        if let project = projectStore.activeProject, let rootPath = project.rootPath {
-            if GitWorktree.isGitRepo(at: rootPath) {
-                if let branch = GitWorktree.currentBranch(in: rootPath) {
-                    actions.append(PaletteAction(
-                        "Git: Current branch",
-                        subtitle: branch,
-                        icon: "arrow.triangle.branch"
-                    ) {})
-                }
-
-                let worktrees = GitWorktree.list(in: rootPath)
-                if worktrees.count > 1 {
-                    for wt in worktrees where !wt.isMain {
-                        actions.append(PaletteAction(
-                            "Switch to worktree: \(wt.branch)",
-                            subtitle: wt.path,
-                            icon: "arrow.triangle.branch"
-                        ) { [weak self] in
-                            self?.switchToWorktree(wt, project: project)
-                        })
-                    }
-                }
-
-                actions.append(PaletteAction(
-                    "Git: New worktree...",
-                    subtitle: "Create branch + worktree for agent isolation",
-                    icon: "plus"
-                ) { [weak self] in
-                    self?.createWorktree(for: project)
-                })
-            }
-        }
-
-        // Jump to attention
-        let attentionSessions = projectStore.sessionsNeedingAttention
-        for entry in attentionSessions {
-            let state = entry.session.agentState == .needsInput ? "needs input" : "error"
-            actions.append(PaletteAction(
-                "\(entry.project.name)/\(entry.session.name) — \(state)",
-                icon: "exclamationmark.triangle"
-            ) { [weak self] in
-                self?.jumpToSession(projectId: entry.project.id, sessionId: entry.session.id)
-            })
-        }
-
-        // Recording
-        if let focusedId = terminalContentView.focusedSessionId,
-           let session = projectStore.activeProject?.sessions.first(where: { $0.id == focusedId }) {
-            if sessionManager.isRecording(session: session) {
-                actions.append(PaletteAction(
-                    "Stop Recording: \(session.name)",
-                    icon: "stop.circle"
-                ) { [weak self] in
-                    self?.sessionManager.stopRecording(session: session)
-                })
-            } else if session.isRunning {
-                actions.append(PaletteAction(
-                    "Start Recording: \(session.name)",
-                    subtitle: "Save as asciicast v2 (.cast)",
-                    icon: "record.circle"
-                ) { [weak self] in
-                    self?.sessionManager.startRecording(session: session)
-                })
-            }
-        }
-
-        // Layout toggle
-        actions.append(PaletteAction("Toggle Focus Mode", icon: "rectangle.expand.vertical") { [weak self] in
-            self?.terminalContentView.toggleFocus()
-        })
-
-        // Activity log
-        actions.append(PaletteAction(
-            activityLogVisible ? "Hide Activity Log" : "Show Activity Log",
-            subtitle: "Cmd+L",
-            icon: "list.bullet.rectangle"
-        ) { [weak self] in
-            self?.toggleActivityLog()
-        })
-
-        // Fleet overview
-        actions.append(PaletteAction(
-            fleetViewVisible ? "Hide Fleet Overview" : "Show Fleet Overview",
-            subtitle: "Cmd+Shift+F",
-            icon: "square.grid.3x3.topleft.filled"
-        ) { [weak self] in
-            self?.toggleFleetView()
-        })
 
         paletteOverlay?.isHidden = false
         paletteState.show(actions: actions)
@@ -716,42 +734,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             object: nil, queue: .main
         ) { [weak self] _ in
             self?.syncWithSystemAppearance()
-        }
-    }
-
-    // MARK: - Git Worktree
-
-    private func switchToWorktree(_ wt: GitWorktree.WorktreeInfo, project: Project) {
-        // Create a new session in the worktree directory
-        let session = Session(
-            name: "wt/\(wt.branch)",
-            command: Self.defaultShell,
-            cwd: wt.path
-        )
-        project.sessions.append(session)
-        do { try sessionManager.startSession(session) } catch {}
-        setFocusedSession(session.id)
-        refreshTerminalView()
-    }
-
-    private func createWorktree(for project: Project) {
-        guard let rootPath = project.rootPath else { return }
-
-        let branchName = "agent/\(UUID().uuidString.prefix(8))"
-        let worktreePath = (rootPath as NSString)
-            .deletingLastPathComponent
-            .appending("/\((rootPath as NSString).lastPathComponent)-\(branchName.replacingOccurrences(of: "/", with: "-"))")
-
-        if GitWorktree.create(in: rootPath, branch: branchName, path: worktreePath) {
-            let session = Session(
-                name: "wt/\(branchName)",
-                command: Self.defaultShell,
-                cwd: worktreePath
-            )
-            project.sessions.append(session)
-            do { try sessionManager.startSession(session) } catch {}
-            setFocusedSession(session.id)
-            refreshTerminalView()
         }
     }
 
@@ -847,6 +829,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             return true
         }
 
+        // Let Cmd+Q pass through to the menu system for app termination
+        if event.modifierFlags.contains(.command) && event.keyCode == 12 { // 'q'
+            return false
+        }
+
         guard let action = keybindingManager.match(event: event) else {
             // In command mode, suppress all keys that aren't bound
             if keybindingManager.suppressesPTYInput {
@@ -928,6 +915,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
 
         case .toggleFleetView:
             toggleFleetView()
+
+        case .expandActivityLog:
+            expandActivityLog()
         }
 
         return true
@@ -957,37 +947,100 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
 
     private func encodeKeyForPTY(_ event: NSEvent) -> Data? {
         let modifiers = event.modifierFlags
+        let hasShift = modifiers.contains(.shift)
+        let hasAlt = modifiers.contains(.option)
+        let hasCtrl = modifiers.contains(.control)
+
+        // xterm modifier parameter: 1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0)
+        let modParam = 1 + (hasShift ? 1 : 0) + (hasAlt ? 2 : 0) + (hasCtrl ? 4 : 0)
+        let hasModifiers = modParam > 1
 
         // Special keys
         switch event.keyCode {
         case 36: return Data([0x0D])   // Return
         case 48:                        // Tab
-            if modifiers.contains(.shift) {
+            if hasShift {
                 return Data([0x1B, 0x5B, 0x5A])  // Shift+Tab → ESC [ Z (back tab)
             }
             return Data([0x09])
         case 51: return Data([0x7F])   // Backspace
         case 53: return Data([0x1B])   // Escape
-        case 123: return Data([0x1B, 0x5B, 0x44]) // Left
-        case 124: return Data([0x1B, 0x5B, 0x43]) // Right
-        case 125: return Data([0x1B, 0x5B, 0x42]) // Down
-        case 126: return Data([0x1B, 0x5B, 0x41]) // Up
-        case 116: return Data([0x1B, 0x5B, 0x35, 0x7E]) // Page Up
-        case 121: return Data([0x1B, 0x5B, 0x36, 0x7E]) // Page Down
-        case 115: return Data([0x1B, 0x5B, 0x48]) // Home
-        case 119: return Data([0x1B, 0x5B, 0x46]) // End
-        case 117: return Data([0x1B, 0x5B, 0x33, 0x7E]) // Delete forward
+
+        // Arrow keys: ESC[1;{mod}{letter} when modified, ESC[{letter} when plain
+        case 123: // Left
+            if hasModifiers { return "\u{1B}[1;\(modParam)D".data(using: .utf8) }
+            return Data([0x1B, 0x5B, 0x44])
+        case 124: // Right
+            if hasModifiers { return "\u{1B}[1;\(modParam)C".data(using: .utf8) }
+            return Data([0x1B, 0x5B, 0x43])
+        case 125: // Down
+            if hasModifiers { return "\u{1B}[1;\(modParam)B".data(using: .utf8) }
+            return Data([0x1B, 0x5B, 0x42])
+        case 126: // Up
+            if hasModifiers { return "\u{1B}[1;\(modParam)A".data(using: .utf8) }
+            return Data([0x1B, 0x5B, 0x41])
+
+        // Navigation keys: ESC[{code};{mod}~ when modified
+        case 116: // Page Up
+            if hasModifiers { return "\u{1B}[5;\(modParam)~".data(using: .utf8) }
+            return Data([0x1B, 0x5B, 0x35, 0x7E])
+        case 121: // Page Down
+            if hasModifiers { return "\u{1B}[6;\(modParam)~".data(using: .utf8) }
+            return Data([0x1B, 0x5B, 0x36, 0x7E])
+        case 115: // Home
+            if hasModifiers { return "\u{1B}[1;\(modParam)H".data(using: .utf8) }
+            return Data([0x1B, 0x5B, 0x48])
+        case 119: // End
+            if hasModifiers { return "\u{1B}[1;\(modParam)F".data(using: .utf8) }
+            return Data([0x1B, 0x5B, 0x46])
+        case 117: // Delete forward
+            if hasModifiers { return "\u{1B}[3;\(modParam)~".data(using: .utf8) }
+            return Data([0x1B, 0x5B, 0x33, 0x7E])
+
+        // Function keys F1-F12
+        case 122: return functionKeyEscape(code: "P", modParam: modParam)   // F1
+        case 120: return functionKeyEscape(code: "Q", modParam: modParam)   // F2
+        case 99:  return functionKeyEscape(code: "R", modParam: modParam)   // F3
+        case 118: return functionKeyEscape(code: "S", modParam: modParam)   // F4
+        case 96:  return "\u{1B}[\(hasModifiers ? "15;\(modParam)" : "15")~".data(using: .utf8)  // F5
+        case 97:  return "\u{1B}[\(hasModifiers ? "17;\(modParam)" : "17")~".data(using: .utf8)  // F6
+        case 98:  return "\u{1B}[\(hasModifiers ? "18;\(modParam)" : "18")~".data(using: .utf8)  // F7
+        case 100: return "\u{1B}[\(hasModifiers ? "19;\(modParam)" : "19")~".data(using: .utf8)  // F8
+        case 101: return "\u{1B}[\(hasModifiers ? "20;\(modParam)" : "20")~".data(using: .utf8)  // F9
+        case 109: return "\u{1B}[\(hasModifiers ? "21;\(modParam)" : "21")~".data(using: .utf8)  // F10
+        case 103: return "\u{1B}[\(hasModifiers ? "23;\(modParam)" : "23")~".data(using: .utf8)  // F11
+        case 111: return "\u{1B}[\(hasModifiers ? "24;\(modParam)" : "24")~".data(using: .utf8)  // F12
+
         default: break
         }
 
         // Ctrl+key
-        if modifiers.contains(.control), let chars = event.charactersIgnoringModifiers {
+        if hasCtrl, let chars = event.charactersIgnoringModifiers {
             if let scalar = chars.unicodeScalars.first {
                 let value = scalar.value
+                // a-z → Ctrl codes 1-26
                 if value >= 0x61 && value <= 0x7A {
                     return Data([UInt8(value - 0x60)])
                 }
+                // Ctrl+special: @[\]^_
+                switch value {
+                case 0x40: return Data([0x00]) // Ctrl+@ → NUL
+                case 0x5B: return Data([0x1B]) // Ctrl+[ → ESC
+                case 0x5C: return Data([0x1C]) // Ctrl+\ → FS
+                case 0x5D: return Data([0x1D]) // Ctrl+] → GS
+                case 0x5E: return Data([0x1E]) // Ctrl+^ → RS
+                case 0x5F: return Data([0x1F]) // Ctrl+_ → US
+                default: break
+                }
             }
+        }
+
+        // Alt/Option as ESC prefix (for Alt+key combos like Alt+b, Alt+f in readline)
+        if hasAlt && !hasCtrl, let chars = event.charactersIgnoringModifiers,
+           let data = chars.data(using: .utf8) {
+            var result = Data([0x1B])
+            result.append(data)
+            return result
         }
 
         // Regular character input
@@ -998,16 +1051,88 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         return nil
     }
 
+    /// Encode F1-F4 (SS3 format: ESC O {code}) or with modifiers (CSI format: ESC [1;{mod}{code}).
+    private func functionKeyEscape(code: String, modParam: Int) -> Data? {
+        if modParam > 1 {
+            return "\u{1B}[1;\(modParam)\(code)".data(using: .utf8)
+        }
+        return "\u{1B}O\(code)".data(using: .utf8)
+    }
+
     // MARK: - Activity Log
 
     private func toggleActivityLog() {
         activityLogVisible.toggle()
 
         if activityLogVisible {
+            // Close expanded overlay if open
+            if activityLogExpanded {
+                hideActivityLogOverlay()
+                activityLogExpanded = false
+            }
+            showActivityLogPanel()
+        } else {
+            hideActivityLogPanel()
+        }
+    }
+
+    private func expandActivityLog() {
+        activityLogExpanded.toggle()
+
+        if activityLogExpanded {
+            // Close panel if open
+            if activityLogVisible {
+                hideActivityLogPanel()
+                activityLogVisible = false
+            }
             showActivityLogOverlay()
         } else {
             hideActivityLogOverlay()
         }
+    }
+
+    private func showActivityLogPanel() {
+        // Show compact activity log as a right-side panel overlaid on the terminal content view
+        activityLogSidebarHost?.removeFromSuperview()
+
+        let logView = ActivityLogView(
+            projects: projectStore.projects,
+            compact: true,
+            onFocusSession: { [weak self] projectId, sessionId in
+                self?.hideActivityLogPanel()
+                self?.activityLogVisible = false
+                self?.jumpToSession(projectId: projectId, sessionId: sessionId)
+            },
+            onExpand: { [weak self] in
+                self?.hideActivityLogPanel()
+                self?.activityLogVisible = false
+                self?.activityLogExpanded = true
+                self?.showActivityLogOverlay()
+            },
+            onDismiss: { [weak self] in
+                self?.hideActivityLogPanel()
+                self?.activityLogVisible = false
+            }
+        )
+
+        let host = NSHostingView(rootView: AnyView(logView))
+        let panelWidth: CGFloat = 280
+        let contentBounds = terminalContentView.bounds
+        host.frame = NSRect(
+            x: contentBounds.width - panelWidth,
+            y: 0,
+            width: panelWidth,
+            height: contentBounds.height
+        )
+        host.autoresizingMask = [.minXMargin, .height]
+        terminalContentView.addSubview(host)
+        activityLogSidebarHost = host
+    }
+
+    private func hideActivityLogPanel() {
+        activityLogSidebarHost?.removeFromSuperview()
+        activityLogSidebarHost = nil
+        window?.makeFirstResponder(terminalContentView)
     }
 
     private func showActivityLogOverlay() {
@@ -1017,14 +1142,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
 
         let logView = ActivityLogView(
             projects: projectStore.projects,
+            compact: false,
             onFocusSession: { [weak self] projectId, sessionId in
                 self?.hideActivityLogOverlay()
-                self?.activityLogVisible = false
+                self?.activityLogExpanded = false
                 self?.jumpToSession(projectId: projectId, sessionId: sessionId)
             },
             onDismiss: { [weak self] in
                 self?.hideActivityLogOverlay()
-                self?.activityLogVisible = false
+                self?.activityLogExpanded = false
             }
         )
 
@@ -1087,31 +1213,28 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     // MARK: - Completion Actions
 
     private func setupCompletionActions() {
-        sessionManager.onTaskCompleted = { [weak self] session, filesChanged, duration in
-            self?.showCompletionBar(session: session, filesChanged: filesChanged, duration: duration)
+        sessionManager.onTaskCompleted = { [weak self] session, context in
+            self?.showCompletionBar(session: session, context: context)
         }
     }
 
-    private func showCompletionBar(session: Session, filesChanged: [String], duration: TimeInterval) {
+    private func showCompletionBar(session: Session, context: CompletionActions.CompletionContext) {
         guard let containerView = window?.contentView else { return }
 
         // Remove existing bar
         completionBarHost?.removeFromSuperview()
 
-        let actions = CompletionActions.suggest(
-            filesChanged: filesChanged,
-            taskDuration: duration,
-            hasTestCommand: false // TODO: read from project config when available
-        )
+        let actions = CompletionActions.suggest(context: context)
 
         guard !actions.isEmpty else { return }
 
+        let summaryText = CompletionActions.summaryLine(context: context)
+
         let barView = CompletionSuggestionBar(
             actions: actions,
-            duration: duration,
-            filesCount: filesChanged.count,
+            summaryText: summaryText,
             onAction: { [weak self] actionId in
-                self?.handleCompletionAction(actionId, session: session, filesChanged: filesChanged)
+                self?.handleCompletionAction(actionId, session: session, filesChanged: context.filesChanged)
                 self?.dismissCompletionBar()
             },
             onDismiss: { [weak self] in
@@ -1333,60 +1456,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             }
             return .success("focused")
 
-        case "send":
-            guard let sessionIdStr = request.args?["session_id"],
-                  let sessionId = UUID(uuidString: sessionIdStr),
-                  let text = request.args?["text"] else {
-                return .failure("Missing session_id or text")
-            }
-            let resolved = text.replacingOccurrences(of: "\\n", with: "\n")
-            if let data = resolved.data(using: .utf8) {
-                for project in projectStore.projects {
-                    if let session = project.sessions.first(where: { $0.id == sessionId }), session.ptyFD >= 0 {
-                        sessionManager.multiplexer.send(to: session.ptyFD, data: data)
-                        return .success("sent")
-                    }
-                }
-            }
-            return .failure("Session not found or not running")
-
-        case "new-session":
-            let projectIdStr = request.args?["project_id"]
-            let command = request.args?["command"] ?? Self.defaultShell
-            let name = request.args?["name"] ?? "Shell"
-            let isAgent = request.args?["agent"] == "true"
-
-            var result = ""
-            DispatchQueue.main.sync {
-                let project: Project?
-                if let pidStr = projectIdStr, let pid = UUID(uuidString: pidStr) {
-                    project = self.projectStore.projects.first { $0.id == pid }
-                } else {
-                    project = self.projectStore.activeProject
-                }
-                guard let project else {
-                    result = "error:Project not found"
-                    return
-                }
-                let session = Session(
-                    name: name,
-                    command: command,
-                    cwd: project.rootPath ?? FileManager.default.homeDirectoryForCurrentUser.path,
-                    isAgent: isAgent,
-                    agentType: isAgent ? "claude" : nil
-                )
-                project.sessions.append(session)
-                do {
-                    try self.sessionManager.startSession(session)
-                    self.refreshTerminalView()
-                    self.focusSession(session.id)
-                    result = session.id.uuidString
-                } catch {
-                    result = "error:\(error)"
-                }
-            }
-            return result.hasPrefix("error:") ? .failure(String(result.dropFirst(6))) : .success(result)
-
         case "status":
             var info: [String: Any] = [
                 "projects": projectStore.projects.count,
@@ -1518,7 +1587,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             return .success("[]")
 
         default:
-            return .failure("Unknown command: \(request.command). Available: list-projects, list-sessions, focus, send, new-session, status, content, fleet-stats, activity")
+            return .failure("Unknown command: \(request.command). Available: list-projects, list-sessions, focus, status, content, fleet-stats, activity")
         }
     }
 
@@ -1583,6 +1652,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
 
     // MARK: - NSWindowDelegate
 
+    func windowDidBecomeKey(_ notification: Notification) {
+        // Reset the phantom scroll guard timer so the content view suppresses
+        // stale scroll events delivered by macOS right after window activation.
+        terminalContentView?.resetFocusGuard()
+    }
+
     func windowWillClose(_ notification: Notification) {
         saveState()
         for project in projectStore.projects {
@@ -1590,5 +1665,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 sessionManager.stopSession(session)
             }
         }
+    }
+
+    private static func loadUserConfig() -> UserConfig? {
+        let path = NSString(string: "~/.config/cosmodrome/config.yml").expandingTildeInPath
+        return try? ConfigParser().parseUserConfig(at: path)
     }
 }

@@ -14,6 +14,8 @@ Built with Swift + AppKit + Metal + libghostty-vt. Not Electron. Not Tauri. Not 
 
 **Simplicity over cleverness.** Two layout modes (grid/focus), not four. Three agent states the user cares about (working/needsInput/error), not seven. One config format (YAML), not two. One Metal view, not N.
 
+**Observe, never orchestrate.** We watch what agents do and surface it to the developer. We never send input to agents, never auto-trigger actions, never control agent behavior. Read-only observation, always.
+
 **Ship, then polish.** Phase 0 is a single terminal that renders. Phase 1 adds projects and agents. If it doesn't serve Phase 0-1, it doesn't belong in the codebase yet.
 
 ## Architecture Overview
@@ -64,18 +66,20 @@ Cosmodrome/
 │   │   ├── Terminal/
 │   │   │   ├── TerminalBackend.swift       # Protocol (swappable VT backend)
 │   │   │   ├── SwiftTermBackend.swift      # Current implementation
-│   │   │   ├── CommandTracker.swift        # OSC 133 semantic prompt tracking
-│   │   │   └── GhosttyBackend.swift        # Future implementation
+│   │   │   └── CommandTracker.swift        # OSC 133 semantic prompt tracking
 │   │   ├── PTY/
 │   │   │   ├── PTYMultiplexer.swift        # kqueue-based I/O loop
 │   │   │   └── PTYProcess.swift            # Single PTY handle
 │   │   ├── Agent/
-│   │   │   ├── AgentDetector.swift         # Pattern matching + state + stats tracking
+│   │   │   ├── AgentDetector.swift         # Pattern matching + state + stats tracking (NSLock protected)
 │   │   │   ├── AgentPatterns.swift         # Per-agent pattern definitions
-│   │   │   ├── ActivityLog.swift           # Structured timeline of agent events
+│   │   │   ├── ActivityLog.swift           # Structured timeline + event grouping
+│   │   │   ├── BufferStateScanner.swift    # TUI buffer cell scanning for agent state
 │   │   │   ├── ModelDetector.swift         # Detect which LLM model is in use
+│   │   │   ├── SessionNarrative.swift      # Heuristic narrative engine (zero LLM)
+│   │   │   ├── StuckDetector.swift         # Error-retry loop detection
 │   │   │   ├── SessionStats.swift          # Per-session usage stats (cost, tasks, files)
-│   │   │   └── CompletionActions.swift     # Suggest next actions on task complete
+│   │   │   └── CompletionActions.swift     # Context-aware completion suggestions
 │   │   ├── Hooks/
 │   │   │   ├── HookServer.swift           # Unix socket server for agent hooks
 │   │   │   └── HookEvent.swift            # Structured hook event model
@@ -112,8 +116,12 @@ Cosmodrome/
 ├── Tests/
 │   ├── CoreTests/
 │   │   ├── AgentDetectorTests.swift
+│   │   ├── BufferStateScannerTests.swift
+│   │   ├── CompletionActionsTests.swift
 │   │   ├── ConfigParserTests.swift
 │   │   ├── PTYMultiplexerTests.swift
+│   │   ├── SessionNarrativeTests.swift
+│   │   ├── StuckDetectorTests.swift
 │   │   └── LayoutEngineTests.swift
 │   └── RendererTests/
 │       └── GlyphAtlasTests.swift
@@ -207,11 +215,16 @@ These are settled. Don't revisit without a strong reason and data.
 
 - File editor or file tree browser
 - LSP integration or code intelligence
-- Built-in git UI (beyond worktree management in future phases)
-- Plugin/extension system (until v1.0)
+- Built-in git UI
+- Plugin/extension system
 - Remote/SSH session management
+- Worktree management
+- Agent control API (send_input, write to PTY)
+- Linux port
+- External terminal orchestration
+- Workflow automation or auto-triggered actions
 - Anything that makes us an IDE
 
 ## Current Phase
 
-**Phase 0: Foundation.** Goal: a single terminal session rendering in a window via SwiftTerm + Metal. Benchmark it against Ghostty. If latency and framerate are competitive, the architecture holds. If not, we learn early.
+**v0.1.0 released.** All foundation phases complete. See CHANGELOG.md for details.

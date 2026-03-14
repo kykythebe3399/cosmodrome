@@ -27,6 +27,7 @@ final class KeybindingManager {
         case enterNormalMode
         case increaseFontSize, decreaseFontSize, resetFontSize
         case toggleFleetView
+        case expandActivityLog
     }
 
     enum Mode {
@@ -78,8 +79,11 @@ final class KeybindingManager {
         // Cmd+P: command palette
         normalBindings[Binding(key: 35, modifiers: .command)] = .commandPalette
 
-        // Cmd+L: toggle activity log
+        // Cmd+L: toggle activity log sidebar
         normalBindings[Binding(key: 37, modifiers: .command)] = .toggleActivityLog
+
+        // Cmd+Shift+L: expand activity log to full-screen overlay
+        normalBindings[Binding(key: 37, modifiers: [.command, .shift])] = .expandActivityLog
 
         // Cmd+]: next project, Cmd+[: previous project
         normalBindings[Binding(key: 30, modifiers: .command)] = .projectNext

@@ -20,6 +20,14 @@ final class SessionManager {
     private var lastAgentCheck: [UUID: Date] = [:]
     /// Tracks when a session was upgraded to agent (for adaptive throttle).
     private var agentUpgradeTime: [UUID: Date] = [:]
+    /// Throttle for agent downgrade checks.
+    private var lastDowngradeCheck: [UUID: Date] = [:]
+    /// Throttle for git branch detection.
+    private var lastBranchCheck: [UUID: Date] = [:]
+    /// Throttle for buffer-based state scanning.
+    private var lastStateScan: [UUID: Date] = [:]
+    /// Throttle for narrative updates.
+    private var lastNarrativeUpdate: [UUID: Date] = [:]
     /// Lock for dicts accessed from both I/O and main threads.
     private let stateLock = NSLock()
 
@@ -27,8 +35,8 @@ final class SessionManager {
     var hookSocketPath: String?
 
     /// Called on main thread when an agent completes a task (working → not working).
-    /// Parameters: session, filesChanged, taskDuration
-    var onTaskCompleted: ((Session, [String], TimeInterval) -> Void)?
+    /// Parameters: session, completionContext
+    var onTaskCompleted: ((Session, CompletionActions.CompletionContext) -> Void)?
 
     /// Called on main thread when a terminal notification (OSC 777) is received.
     var onTerminalNotification: ((Session, TerminalNotification) -> Void)?
@@ -65,7 +73,12 @@ final class SessionManager {
 
         let cols: UInt16 = 80
         let rows: UInt16 = 24
-        let cwd = session.cwd == "." ? FileManager.default.currentDirectoryPath : session.cwd
+
+        // Resolve relative CWD to absolute path at spawn time
+        if session.cwd == "." {
+            session.cwd = FileManager.default.currentDirectoryPath
+        }
+        let cwd = session.cwd
 
         // Inject hook server env vars so CosmodromeHook can reach us
         var env = session.environment
@@ -113,6 +126,7 @@ final class SessionManager {
         // Create detector: explicit agent flag, or auto-detect from command name
         let detector: AgentDetector?
         if session.isAgent {
+            session.agentSince = session.agentSince ?? Date()
             detector = AgentDetector(
                 agentType: session.agentType ?? "claude",
                 sessionId: session.id,
@@ -121,6 +135,7 @@ final class SessionManager {
         } else if let detectedType = AgentPatterns.detectType(from: session.command) {
             session.isAgent = true
             session.agentType = detectedType
+            session.agentSince = Date()
             detector = AgentDetector(
                 agentType: detectedType,
                 sessionId: session.id,
@@ -134,8 +149,8 @@ final class SessionManager {
             detector.stats = session.stats
             stateLock.lock()
             detectors[session.id] = detector
-            stateLock.unlock()
             agentUpgradeTime[session.id] = Date()
+            stateLock.unlock()
         }
 
         session.backend = backend
@@ -168,10 +183,14 @@ final class SessionManager {
                         session.agentState = newState
                         if model != session.agentModel { session.agentModel = model }
 
-                        // Parse Claude Code status bar (throttled)
-                        self?.updateStatusLine(session: session, backend: backend)
-                        // Scan terminal buffer for permission prompts (throttled, 300ms)
-                        self?.scanForPromptIfNeeded(session: session, backend: backend)
+                        // Read buffer ONCE and run all scans against the snapshot.
+                        // Single lock acquisition, single yDisp snap/restore — prevents scroll jitter.
+                        self?.runBufferScans(session: session, backend: backend)
+                        // Detect git branch (throttled, 5s)
+                        self?.updateGitBranch(session: session)
+
+                        // Capture final state after all overrides for transition tracking
+                        let finalState = session.agentState
 
                         // Append events to project's activity log
                         if let project = self?.findProject(for: session) {
@@ -187,16 +206,16 @@ final class SessionManager {
                             }
                         }
 
-                        // Handle state transitions
-                        if newState != oldState {
+                        // Handle state transitions (use finalState which includes buffer overrides)
+                        if finalState != oldState {
                             // Starting a new task
-                            if newState == .working && oldState != .working {
+                            if finalState == .working && oldState != .working {
                                 session.taskStartedAt = Date()
                                 session.filesChangedInTask = []
                             }
 
                             // Task completed (was working, now not)
-                            if oldState == .working && newState != .working {
+                            if oldState == .working && finalState != .working {
                                 let duration = session.taskStartedAt
                                     .map { Date().timeIntervalSince($0) } ?? 0
                                 let files = session.filesChangedInTask
@@ -212,21 +231,44 @@ final class SessionManager {
                                 }
 
                                 // Trigger completion actions
-                                self?.onTaskCompleted?(session, files, duration)
+                                let events: [ActivityEvent]
+                                if let project = self?.findProject(for: session) {
+                                    events = project.activityLog.events(for: session.id)
+                                } else {
+                                    events = []
+                                }
+                                let ctx = CompletionActions.CompletionContext(
+                                    filesChanged: files,
+                                    taskDuration: duration,
+                                    hasTestCommand: false,
+                                    stats: session.stats,
+                                    events: events,
+                                    narrative: session.narrative,
+                                    stuckInfo: session.stuckInfo
+                                )
+                                self?.onTaskCompleted?(session, ctx)
                             }
 
                             // Mark session as needing attention + send macOS notification
-                            if newState == .needsInput || newState == .error {
+                            if finalState == .needsInput || finalState == .error
+                                || (finalState == .inactive && oldState == .working) {
                                 session.hasUnreadNotification = true
                             }
                             if let project = self?.findProject(for: session) {
                                 AgentNotifications.notifyAgentState(project: project, session: session)
                             }
                         }
+
+                        // Update narrative summary (throttled — every 2s)
+                        self?.updateNarrative(session: session)
                     }
                 } else {
                     // No detector yet — check if an agent started in this shell session
                     self?.checkForAgentStartup(session: session, backend: backend)
+                    // Detect git branch for plain shell sessions too
+                    DispatchQueue.main.async {
+                        self?.updateGitBranch(session: session)
+                    }
                 }
                 DispatchQueue.main.async {
                     onDirty()
@@ -314,11 +356,20 @@ final class SessionManager {
 
         portDetector.untrack(sessionId: session.id)
 
-        if session.pid > 0 {
-            kill(session.pid, SIGTERM)
+        let pid = session.pid
+        let fd = session.ptyFD
+
+        if pid > 0 {
+            kill(pid, SIGTERM)
         }
-        if session.ptyFD >= 0 {
-            multiplexer.unregister(fd: session.ptyFD)
+        if fd >= 0 {
+            multiplexer.unregister(fd: fd)
+            close(fd)
+        }
+        // Reap child process to prevent zombie
+        if pid > 0 {
+            var status: Int32 = 0
+            waitpid(pid, &status, WNOHANG)
         }
 
         session.isRunning = false
@@ -334,12 +385,15 @@ final class SessionManager {
         session.taskStartedAt = nil
         session.filesChangedInTask = []
         session.detectedPorts = []
+        session.gitBranch = nil
         stateLock.lock()
+        defer { stateLock.unlock() }
         lastStatusParse.removeValue(forKey: session.id)
         lastPromptScan.removeValue(forKey: session.id)
+        lastStateScan.removeValue(forKey: session.id)
         detectors.removeValue(forKey: session.id)
         lastAgentCheck.removeValue(forKey: session.id)
-        stateLock.unlock()
+        lastBranchCheck.removeValue(forKey: session.id)
         agentUpgradeTime.removeValue(forKey: session.id)
     }
 
@@ -364,7 +418,10 @@ final class SessionManager {
 
     /// Start recording a session's output in asciicast v2 format.
     func startRecording(session: Session) {
-        guard recorders[session.id] == nil else { return }
+        stateLock.lock()
+        let alreadyRecording = recorders[session.id] != nil
+        stateLock.unlock()
+        guard !alreadyRecording else { return }
 
         let backend = session.backend
         let width = backend?.cols ?? 80
@@ -380,7 +437,9 @@ final class SessionManager {
             let recorder = try AsciicastRecorder(
                 path: path, width: width, height: height, title: session.name
             )
+            stateLock.lock()
             recorders[session.id] = recorder
+            stateLock.unlock()
         } catch {
             FileHandle.standardError.write("[Cosmodrome] Failed to start recording: \(error)\n".data(using: .utf8)!)
         }
@@ -388,13 +447,17 @@ final class SessionManager {
 
     /// Stop recording a session.
     func stopRecording(session: Session) {
-        guard let recorder = recorders.removeValue(forKey: session.id) else { return }
-        recorder.close()
+        stateLock.lock()
+        let recorder = recorders.removeValue(forKey: session.id)
+        stateLock.unlock()
+        recorder?.close()
     }
 
     /// Check if a session is being recorded.
     func isRecording(session: Session) -> Bool {
-        recorders[session.id] != nil
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return recorders[session.id] != nil
     }
 
     // MARK: - Runtime Agent Detection
@@ -440,11 +503,17 @@ final class SessionManager {
         Self.debugLog("checkForAgentStartup: session=\(session.name) scanning \(scanRows) rows, text=\(text.prefix(300))")
 
         // Detect agent startup signatures.
-        // Claude Code: spinner chars, status bar signatures, welcome text, or TUI elements.
+        // Spinner chars alone are NOT sufficient — many CLI tools (npm, cargo, pip) use them.
+        // Require spinner + a secondary Claude Code signal to avoid false upgrades.
         let agentType: String?
         if text.range(of: #"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]"#, options: .regularExpression) != nil {
-            agentType = "claude"
-        } else if text.range(of: #"ctx:\s*\d+"#, options: .regularExpression) != nil
+            let hasSecondarySignal =
+                text.range(of: #"(?i)ctx:\s*\d+"#, options: .regularExpression) != nil
+                || text.range(of: #"(?i)\b(opus|sonnet|haiku)\s+\d"#, options: .regularExpression) != nil
+                || text.range(of: #"shift\+tab"#, options: [.regularExpression, .caseInsensitive]) != nil
+                || text.range(of: #"(?i)\bclaude\s+code\b"#, options: .regularExpression) != nil
+            agentType = hasSecondarySignal ? "claude" : nil
+        } else if text.range(of: #"(?i)ctx:\s*\d+"#, options: .regularExpression) != nil
             || text.range(of: #"(?i)\b(opus|sonnet|haiku)\s+\d"#, options: .regularExpression) != nil
             || text.range(of: #"shift\+tab"#, options: [.regularExpression, .caseInsensitive]) != nil {
             // Claude Code status bar detected (visible when idle too)
@@ -480,7 +549,7 @@ final class SessionManager {
         Self.debugLog("upgradeToAgentSession: session=\(session.name) type=\(agentType)")
         session.isAgent = true
         session.agentType = agentType
-        agentUpgradeTime[session.id] = Date()
+        session.agentSince = Date()
 
         let detector = AgentDetector(
             agentType: agentType,
@@ -490,6 +559,7 @@ final class SessionManager {
         detector.stats = session.stats
         stateLock.lock()
         detectors[session.id] = detector
+        agentUpgradeTime[session.id] = Date()
         stateLock.unlock()
 
         // Re-register with multiplexer to include the detector for inline analysis
@@ -501,7 +571,10 @@ final class SessionManager {
             backend: backend,
             agentDetector: detector,
             onOutput: { [weak self] in
-                if let detector = self?.detectors[sessionId] {
+                self?.stateLock.lock()
+                let detector = self?.detectors[sessionId]
+                self?.stateLock.unlock()
+                if let detector {
                     let newState = detector.state
                     let oldState = session.agentState
                     let model = detector.modelDetector.currentModel
@@ -511,7 +584,11 @@ final class SessionManager {
                         session.agentState = newState
                         if model != session.agentModel { session.agentModel = model }
                         self?.updateStatusLine(session: session, backend: backend)
+                        self?.scanForAgentStateIfNeeded(session: session, backend: backend)
                         self?.scanForPromptIfNeeded(session: session, backend: backend)
+                        self?.updateGitBranch(session: session)
+
+                        let finalState = session.agentState
 
                         if let project = self?.findProject(for: session) {
                             project.activityLog.append(contentsOf: events)
@@ -525,12 +602,12 @@ final class SessionManager {
                             }
                         }
 
-                        if newState != oldState {
-                            if newState == .working && oldState != .working {
+                        if finalState != oldState {
+                            if finalState == .working && oldState != .working {
                                 session.taskStartedAt = Date()
                                 session.filesChangedInTask = []
                             }
-                            if oldState == .working && newState != .working {
+                            if oldState == .working && finalState != .working {
                                 let duration = session.taskStartedAt
                                     .map { Date().timeIntervalSince($0) } ?? 0
                                 let files = session.filesChangedInTask
@@ -542,7 +619,22 @@ final class SessionManager {
                                         kind: .taskCompleted(duration: duration)
                                     ))
                                 }
-                                self?.onTaskCompleted?(session, files, duration)
+                                let events2: [ActivityEvent]
+                                if let project = self?.findProject(for: session) {
+                                    events2 = project.activityLog.events(for: session.id)
+                                } else {
+                                    events2 = []
+                                }
+                                let ctx = CompletionActions.CompletionContext(
+                                    filesChanged: files,
+                                    taskDuration: duration,
+                                    hasTestCommand: false,
+                                    stats: session.stats,
+                                    events: events2,
+                                    narrative: session.narrative,
+                                    stuckInfo: session.stuckInfo
+                                )
+                                self?.onTaskCompleted?(session, ctx)
                             }
                             if let project = self?.findProject(for: session) {
                                 AgentNotifications.notifyAgentState(project: project, session: session)
@@ -568,44 +660,44 @@ final class SessionManager {
         multiplexer.updateSession(fd: session.ptyFD, session: io)
     }
 
+    /// Check if an agent has exited and the session returned to a plain shell (legacy path).
+    /// The consolidated runBufferScans() path is preferred — it reads the buffer once.
+    private func checkForAgentExit(session: Session, backend: TerminalBackend) {
+        let rows = backend.readRowsAtBottom(count: backend.rows)
+        checkForAgentExitFromSnapshot(session: session, rows: rows)
+    }
+
+    /// Downgrade a session from agent back to plain shell.
+    private func downgradeFromAgent(session: Session) {
+        guard session.isAgent else { return }
+        session.isAgent = false
+        session.agentType = nil
+        session.agentState = .inactive
+        session.agentModel = nil
+        stateLock.lock()
+        detectors.removeValue(forKey: session.id)
+        stateLock.unlock()
+        agentUpgradeTime.removeValue(forKey: session.id)
+        lastDowngradeCheck.removeValue(forKey: session.id)
+        lastStateScan.removeValue(forKey: session.id)
+    }
+
     // MARK: - Status Line Parsing
 
     private static let debugStatus = ProcessInfo.processInfo.environment["COSMODROME_DEBUG_STATUS"] != nil
+        || ProcessInfo.processInfo.environment["COSMODROME_DEBUG_STATE"] != nil
 
     private static func debugLog(_ message: @autoclosure () -> String) {
         if debugStatus {
-            FileHandle.standardError.write("[StatusParse] \(message())\n".data(using: .utf8)!)
+            FileHandle.standardError.write("[SessionManager] \(message())\n".data(using: .utf8)!)
         }
     }
 
-    /// Parse Claude Code's status bar from the terminal buffer.
-    /// Throttled: 0.5s for the first 10s after agent upgrade, 2s after.
+    /// Parse Claude Code's status bar from the terminal buffer (legacy path).
+    /// The consolidated runBufferScans() path is preferred — it reads the buffer once.
     private func updateStatusLine(session: Session, backend: TerminalBackend) {
-        let now = Date()
-        // Adaptive throttle: faster during the first 10s after upgrade so status populates quickly.
-        let upgradeAge = agentUpgradeTime[session.id].map { now.timeIntervalSince($0) } ?? 10.0
-        let throttleInterval: TimeInterval = upgradeAge < 10.0 ? 0.5 : 2.0
-        if let last = lastStatusParse[session.id], now.timeIntervalSince(last) < throttleInterval {
-            return
-        }
-        lastStatusParse[session.id] = now
-
-        let info = Self.parseStatusLine(from: backend)
-        Self.debugLog("updateStatusLine: session=\(session.name) ctx=\(info.context ?? "nil") model=\(info.model ?? "nil") mode=\(info.mode ?? "nil") effort=\(info.effort ?? "nil") cost=\(info.cost ?? "nil")")
-        // Only update fields with non-nil values — don't erase good data when
-        // a parse fails (e.g. during a Claude Code TUI redraw).
-        if let ctx = info.context, ctx != session.agentContext { session.agentContext = ctx }
-        if let mode = info.mode, mode != session.agentMode { session.agentMode = mode }
-        if let effort = info.effort, effort != session.agentEffort { session.agentEffort = effort }
-        if let cost = info.cost, cost != session.agentCost {
-            session.agentCost = cost
-            if let costVal = Self.parseCostValue(cost) {
-                session.stats.recordCost(costVal)
-            }
-        }
-        if let model = info.model, model != session.agentModel {
-            session.agentModel = model
-        }
+        let rows = backend.readRowsAtBottom(count: 6)
+        updateStatusLineFromSnapshot(session: session, rows: rows)
     }
 
     struct StatusLineInfo {
@@ -617,35 +709,18 @@ final class SessionManager {
     }
 
     /// Read the bottom rows of the terminal buffer and extract status bar info.
+    /// Prefer parseStatusLine(from rowStrings:) with pre-read rows to avoid per-cell yDisp mutations.
+    static func parseStatusLine(from backend: TerminalBackend) -> StatusLineInfo {
+        let rowStrings = backend.readRowsAtBottom(count: 6)
+        return parseStatusLine(from: rowStrings)
+    }
+
+    /// Parse status bar info from pre-read row strings.
     /// Claude Code's status line format (2 lines at bottom):
     ///   Line 1: user@host  /path  Opus 4.6 | ctx: 89%   ● high · /effort
     ///   Line 2: ⏸ plan mode on (shift+tab to cycle)
-    static func parseStatusLine(from backend: TerminalBackend) -> StatusLineInfo {
-        backend.lock()
-        let rows = backend.rows
-        let cols = backend.cols
-
-        // Read bottom 6 rows into individual trimmed strings.
-        // Use cellAtBottom to read the true bottom even if the user has scrolled back.
-        var rowStrings: [String] = []
-        for row in max(0, rows - 6)..<rows {
-            var line = ""
-            for col in 0..<cols {
-                let cell = backend.cellAtBottom(row: row, col: col)
-                let cp = cell.codepoint
-                if cp >= 32 && cp < 0x110000 {
-                    line.append(Character(Unicode.Scalar(cp)!))
-                } else {
-                    line.append(" ")
-                }
-            }
-            // Trim trailing whitespace
-            while line.hasSuffix(" ") { line.removeLast() }
-            rowStrings.append(line)
-        }
-        backend.unlock()
-
-        debugLog("Bottom 6 rows: \(rowStrings.enumerated().map { "[\($0)]: \($1)" }.joined(separator: " | "))")
+    static func parseStatusLine(from rowStrings: [String]) -> StatusLineInfo {
+        debugLog("Bottom \(rowStrings.count) rows: \(rowStrings.enumerated().map { "[\($0)]: \($1)" }.joined(separator: " | "))")
 
         var info = StatusLineInfo()
 
@@ -654,7 +729,7 @@ final class SessionManager {
         var modeRow: String?
 
         for row in rowStrings {
-            if row.range(of: #"ctx:\s*\d+"#, options: .regularExpression) != nil
+            if row.range(of: #"(?i)ctx:\s*\d+"#, options: .regularExpression) != nil
                 || row.range(of: #"(?i)\b(opus|sonnet|haiku)\s+\d"#, options: .regularExpression) != nil {
                 infoRow = row
             }
@@ -670,7 +745,7 @@ final class SessionManager {
         let infoText = infoRow ?? rowStrings.joined(separator: " ")
 
         // Context: "ctx: 89%" or "ctx:45%"
-        if let range = infoText.range(of: #"ctx:\s*(\d+%)"#, options: .regularExpression) {
+        if let range = infoText.range(of: #"(?i)ctx:\s*(\d+%)"#, options: .regularExpression) {
             let match = String(infoText[range])
             // Extract just the percentage part
             if let pctRange = match.range(of: #"\d+%"#, options: .regularExpression) {
@@ -715,11 +790,12 @@ final class SessionManager {
         // Mode: extract from mode row (or fallback to all rows)
         let modeText = modeRow ?? rowStrings.joined(separator: " ")
 
-        // Match confirmed Claude Code formats: "plan mode on", "accept edits on", "bypass permissions on"
+        // Match confirmed Claude Code formats: "plan mode on", "accept edits on", "bypass permissions on", "auto mode on"
         let modePatterns: [(pattern: String, label: String)] = [
             (#"(?i)\bbypass\s+permissions?"#, "Bypass"),
-            (#"(?i)\baccept\s+edits?"#, "Accept Edits"),
+            (#"(?i)\bauto\s+mode"#, "Auto"),
             (#"(?i)\bplan\s+mode"#, "Plan"),
+            (#"(?i)\baccept\s+edits?"#, "Accept Edits"),
         ]
         for (pattern, label) in modePatterns {
             if modeText.range(of: pattern, options: .regularExpression) != nil {
@@ -741,6 +817,93 @@ final class SessionManager {
         return Double(cleaned)
     }
 
+    // MARK: - Git Branch Detection
+
+    /// Detect the current git branch for a session's working directory.
+    /// Throttled to every 5 seconds — branch changes are infrequent.
+    private func updateGitBranch(session: Session) {
+        let now = Date()
+        stateLock.lock()
+        if let last = lastBranchCheck[session.id], now.timeIntervalSince(last) < 5.0 {
+            stateLock.unlock()
+            return
+        }
+        lastBranchCheck[session.id] = now
+        stateLock.unlock()
+
+        // CWD should already be resolved to absolute in startSession(), but guard against "."
+        let cwd = session.cwd == "." ? FileManager.default.currentDirectoryPath : session.cwd
+
+        DispatchQueue.global(qos: .utility).async {
+            let branch = Self.detectGitBranch(in: cwd)
+            DispatchQueue.main.async {
+                if branch != session.gitBranch {
+                    session.gitBranch = branch
+                }
+            }
+        }
+    }
+
+    /// Run `git rev-parse --abbrev-ref HEAD` in the given directory.
+    static func detectGitBranch(in directory: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["rev-parse", "--abbrev-ref", "HEAD"]
+        process.currentDirectoryURL = URL(fileURLWithPath: directory)
+        process.environment = ["GIT_TERMINAL_PROMPT": "0"]
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+
+        guard process.terminationStatus == 0 else { return nil }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let output = String(data: data, encoding: .utf8) else { return nil }
+        let branch = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return branch.isEmpty ? nil : branch
+    }
+
+    // MARK: - Narrative Updates
+
+    /// Update the session narrative summary. Throttled to every 2 seconds.
+    private func updateNarrative(session: Session) {
+        guard session.isAgent else { return }
+        let now = Date()
+        if let last = lastNarrativeUpdate[session.id], now.timeIntervalSince(last) < 2.0 {
+            return
+        }
+        lastNarrativeUpdate[session.id] = now
+
+        let events: [ActivityEvent]
+        if let project = findProject(for: session) {
+            events = project.activityLog.events(for: session.id)
+        } else {
+            events = []
+        }
+
+        // Run stuck detection
+        let stuckInfo = StuckDetector.detect(events: events, currentState: session.agentState)
+        session.stuckInfo = stuckInfo
+
+        // Generate narrative
+        let summary = SessionNarrative.summarize(
+            state: session.agentState,
+            events: events,
+            stats: session.stats,
+            taskStartedAt: session.taskStartedAt,
+            stuckInfo: stuckInfo
+        )
+        session.narrative = summary
+    }
+
     // MARK: - Terminal Buffer Prompt Scanning
 
     /// Patterns that indicate a permission/input prompt is visible on screen.
@@ -758,31 +921,17 @@ final class SessionManager {
     ]
 
     /// Scan the rendered terminal buffer for permission prompt patterns.
-    /// This is more reliable than scanning raw PTY output because TUI apps
-    /// (like Claude Code) use cursor positioning, and after VT parsing the
-    /// buffer contains the actual visible screen text.
+    /// Prefer scanForInputPrompt(from rowStrings:) with pre-read rows to avoid per-cell yDisp mutations.
     static func scanForInputPrompt(from backend: TerminalBackend) -> Bool {
-        backend.lock()
-        let rows = backend.rows
-        let cols = backend.cols
+        let allRows = backend.readRowsAtBottom(count: backend.rows)
+        return scanForInputPrompt(from: allRows)
+    }
 
-        // Read all rows except the bottom 3 (status bar area) to avoid
-        // matching patterns in the status line (e.g., "permission" mode label).
-        var text = ""
-        let scanEnd = max(0, rows - 3)
-        for row in 0..<scanEnd {
-            for col in 0..<cols {
-                let cell = backend.cellAtBottom(row: row, col: col)
-                let cp = cell.codepoint
-                if cp >= 32 && cp < 0x110000 {
-                    text.append(Character(Unicode.Scalar(cp)!))
-                } else {
-                    text.append(" ")
-                }
-            }
-            text.append("\n")
-        }
-        backend.unlock()
+    /// Scan pre-read row strings for permission prompt patterns.
+    /// Excludes bottom 3 rows (status bar area) to avoid false matches.
+    static func scanForInputPrompt(from rowStrings: [String]) -> Bool {
+        let scanEnd = max(0, rowStrings.count - 3)
+        let text = Array(rowStrings.prefix(scanEnd)).joined(separator: "\n")
 
         for pattern in promptPatterns {
             if text.range(of: pattern, options: .regularExpression) != nil {
@@ -794,22 +943,132 @@ final class SessionManager {
 
     /// Check the terminal buffer for input prompts (throttled at 300ms).
     /// Called from the onOutput callback alongside updateStatusLine().
+    /// Check the terminal buffer for input prompts (legacy path).
+    /// The consolidated runBufferScans() path is preferred — it reads the buffer once.
     private func scanForPromptIfNeeded(session: Session, backend: TerminalBackend) {
+        let rows = backend.readRowsAtBottom(count: backend.rows)
+        scanForPromptFromSnapshot(session: session, rows: rows)
+    }
+
+    // MARK: - Buffer-Based State Scanning
+
+    /// Read rows from the rendered terminal buffer as trimmed strings.
+    /// Delegates to backend.readRowsAtBottom for atomic batch reading.
+    static func readBufferRows(from backend: TerminalBackend, bottomRows count: Int) -> [String] {
+        backend.readRowsAtBottom(count: count)
+    }
+
+    /// Scan the rendered terminal buffer for agent state (throttled at 300ms).
+    /// Overrides the regex-based state from AgentDetector when the buffer provides
+    /// stronger evidence (e.g., spinner visible on screen = definitely working).
+    private func scanForAgentStateIfNeeded(session: Session, backend: TerminalBackend) {
         guard session.isAgent else { return }
 
         let now = Date()
-        // Prompt scan runs more frequently than status parsing (300ms vs 2s)
-        // because permission prompts are time-sensitive.
+        if let last = lastStateScan[session.id], now.timeIntervalSince(last) < 0.3 {
+            return
+        }
+        lastStateScan[session.id] = now
+
+        let rows = Self.readBufferRows(from: backend, bottomRows: 12)
+        let result = BufferStateScanner.scan(rows: rows, agentType: session.agentType)
+        applyBufferScanResult(result, to: session)
+    }
+
+    /// Apply a BufferStateScanner result to the session's agent state.
+    private func applyBufferScanResult(_ result: BufferStateResult, to session: Session) {
+        Self.debugLog("scanForAgentState: session=\(session.name) buffer=\(result.state.rawValue) confidence=\(result.confidence.rawValue) reason=\(result.reason) current=\(session.agentState.rawValue)")
+
+        switch result.confidence {
+        case .high:
+            if session.agentState != result.state {
+                session.agentState = result.state
+            }
+        case .medium:
+            if session.agentState == .inactive && result.state != .inactive {
+                session.agentState = result.state
+            }
+        case .none:
+            break
+        }
+    }
+
+    // MARK: - Consolidated Buffer Scanning
+
+    /// Read the terminal buffer ONCE and run all scans against the shared snapshot.
+    /// This replaces 4 separate lock-acquire + cellAtBottom scan passes with a single
+    /// readRowsAtBottom call (1 yDisp snap/restore instead of ~3000 per-cell mutations).
+    private func runBufferScans(session: Session, backend: TerminalBackend) {
+        // Read ALL rows at bottom in one atomic pass
+        let allRows = backend.readRowsAtBottom(count: backend.rows)
+        guard !allRows.isEmpty else { return }
+
+        // Status line parsing (bottom 6 rows, throttled)
+        updateStatusLineFromSnapshot(session: session, rows: allRows)
+        // Buffer-based agent state scanning (bottom 12 rows, throttled)
+        scanForAgentStateFromSnapshot(session: session, rows: allRows)
+        // Permission prompt scanning (all rows except bottom 3, throttled)
+        scanForPromptFromSnapshot(session: session, rows: allRows)
+        // Agent exit check (bottom 6 rows, throttled 5s)
+        checkForAgentExitFromSnapshot(session: session, rows: allRows)
+    }
+
+    /// Parse status line from pre-read buffer snapshot (throttled).
+    private func updateStatusLineFromSnapshot(session: Session, rows: [String]) {
+        let now = Date()
+        let upgradeAge = agentUpgradeTime[session.id].map { now.timeIntervalSince($0) } ?? 10.0
+        let throttleInterval: TimeInterval = upgradeAge < 10.0 ? 0.5 : 2.0
+        if let last = lastStatusParse[session.id], now.timeIntervalSince(last) < throttleInterval {
+            return
+        }
+        lastStatusParse[session.id] = now
+
+        let bottom6 = Array(rows.suffix(6))
+        let info = Self.parseStatusLine(from: bottom6)
+        Self.debugLog("updateStatusLine: session=\(session.name) ctx=\(info.context ?? "nil") model=\(info.model ?? "nil") mode=\(info.mode ?? "nil") effort=\(info.effort ?? "nil") cost=\(info.cost ?? "nil")")
+        if let ctx = info.context, ctx != session.agentContext { session.agentContext = ctx }
+        if let mode = info.mode, mode != session.agentMode { session.agentMode = mode }
+        if let effort = info.effort, effort != session.agentEffort { session.agentEffort = effort }
+        if let cost = info.cost, cost != session.agentCost {
+            session.agentCost = cost
+            if let costVal = Self.parseCostValue(cost) {
+                session.stats.recordCost(costVal)
+            }
+        }
+        if let model = info.model, model != session.agentModel {
+            session.agentModel = model
+        }
+    }
+
+    /// Scan pre-read buffer snapshot for agent state (throttled 300ms).
+    private func scanForAgentStateFromSnapshot(session: Session, rows: [String]) {
+        guard session.isAgent else { return }
+
+        let now = Date()
+        if let last = lastStateScan[session.id], now.timeIntervalSince(last) < 0.3 {
+            return
+        }
+        lastStateScan[session.id] = now
+
+        let bottom12 = Array(rows.suffix(12))
+        let result = BufferStateScanner.scan(rows: bottom12, agentType: session.agentType)
+        applyBufferScanResult(result, to: session)
+    }
+
+    /// Scan pre-read buffer snapshot for permission prompts (throttled 300ms).
+    private func scanForPromptFromSnapshot(session: Session, rows: [String]) {
+        guard session.isAgent else { return }
+
+        let now = Date()
         if let last = lastPromptScan[session.id], now.timeIntervalSince(last) < 0.3 {
             return
         }
         lastPromptScan[session.id] = now
 
-        let promptDetected = Self.scanForInputPrompt(from: backend)
+        let promptDetected = Self.scanForInputPrompt(from: rows)
 
         if promptDetected {
             if session.agentState != .needsInput {
-                // Transition to needsInput
                 session.agentState = .needsInput
                 session.hasUnreadNotification = true
                 if let project = findProject(for: session) {
@@ -817,16 +1076,50 @@ final class SessionManager {
                 }
             }
         } else if session.agentState == .needsInput {
-            // Prompt is no longer visible — the user likely approved it.
-            // Let the raw output detector handle the transition back to working/inactive.
-            // But if the detector is stuck on needsInput, clear it after confirming
-            // the prompt is gone from the buffer.
             stateLock.lock()
             let detector = detectors[session.id]
             stateLock.unlock()
             if let detector, detector.state != .needsInput {
                 session.agentState = detector.state
             }
+        }
+    }
+
+    /// Check for agent exit from pre-read buffer snapshot (throttled 5s).
+    private func checkForAgentExitFromSnapshot(session: Session, rows: [String]) {
+        guard session.isAgent else { return }
+
+        stateLock.lock()
+        let detector = detectors[session.id]
+        let now = Date()
+        if let last = lastDowngradeCheck[session.id], now.timeIntervalSince(last) < 5.0 {
+            stateLock.unlock()
+            return
+        }
+        lastDowngradeCheck[session.id] = now
+        stateLock.unlock()
+
+        guard let detector, detector.state == .inactive else { return }
+
+        let lastLine = (rows.last ?? "").trimmingCharacters(in: .whitespaces)
+        let looksLikeShellPrompt = lastLine.hasSuffix("$") || lastLine.hasSuffix("%")
+            || lastLine.hasSuffix("#") || lastLine.hasSuffix(">")
+
+        let bottom6 = Array(rows.suffix(6))
+        let bufferText = bottom6.joined(separator: "\n")
+
+        let hasAgentSignature =
+            bufferText.range(of: #"(?i)ctx:\s*\d+"#, options: .regularExpression) != nil
+            || bufferText.range(of: #"(?i)\b(opus|sonnet|haiku)\s+\d"#, options: .regularExpression) != nil
+            || bufferText.range(of: #"shift\+tab"#, options: [.regularExpression, .caseInsensitive]) != nil
+            || bufferText.range(of: #"(?i)\bclaude\s+code\b"#, options: .regularExpression) != nil
+            || bufferText.range(of: #"(?i)\baider\s*>"#, options: .regularExpression) != nil
+            || bufferText.range(of: #"(?i)\bcodex\s*>"#, options: .regularExpression) != nil
+            || bufferText.range(of: #"(?i)\bgemini\s*>"#, options: .regularExpression) != nil
+
+        if looksLikeShellPrompt && !hasAgentSignature {
+            Self.debugLog("checkForAgentExit: downgrading session=\(session.name) back to plain shell")
+            downgradeFromAgent(session: session)
         }
     }
 
@@ -852,9 +1145,10 @@ final class SessionManager {
         }
 
         // Stop recording if active
-        if let recorder = recorders.removeValue(forKey: session.id) {
-            recorder.close()
-        }
+        stateLock.lock()
+        let recorder = recorders.removeValue(forKey: session.id)
+        stateLock.unlock()
+        recorder?.close()
 
         // Mark unexpected exit (process died while it was running)
         if wasRunning {

@@ -37,7 +37,7 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
     // Theme colors (mutable for theme switching)
     private(set) var theme: ResolvedTheme
 
-    init?(metalView: MTKView) {
+    init?(metalView: MTKView, userConfig: UserConfig? = nil) {
         guard let device = MTLCreateSystemDefaultDevice() else { return nil }
         self.device = device
 
@@ -47,21 +47,24 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
         self.theme = ResolvedTheme(theme: .dark)
 
         let scale = NSScreen.main?.backingScaleFactor ?? 2.0
-        let fm = FontManager(scale: scale)
+        let fm = FontManager(config: userConfig?.font, scale: scale)
         self.fontManager = fm
         self.atlas = GlyphAtlas(device: device, fontManager: fm)
 
         // Create vertex buffers (triple-buffered)
         let bufferSize = maxVertices * MemoryLayout<TerminalVertex>.stride
-        self.vertexBuffers = (0..<3).map { _ in
-            device.makeBuffer(length: bufferSize, options: .storageModeShared)!
+        let buffers = (0..<3).compactMap { _ in
+            device.makeBuffer(length: bufferSize, options: .storageModeShared)
         }
+        guard buffers.count == 3 else { return nil }
+        self.vertexBuffers = buffers
 
         // Create uniforms buffer
-        self.uniformsBuffer = device.makeBuffer(
+        guard let uniformsBuf = device.makeBuffer(
             length: MemoryLayout<TerminalUniforms>.stride,
             options: .storageModeShared
-        )!
+        ) else { return nil }
+        self.uniformsBuffer = uniformsBuf
 
         // Compile shaders
         let library: MTLLibrary
@@ -87,7 +90,7 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
         vertexDesc.layouts[0].stepRate = 1
         vertexDesc.layouts[0].stepFunction = .perVertex
 
-        func makePipeline(vertex: String, fragment: String) -> MTLRenderPipelineState {
+        func makePipeline(vertex: String, fragment: String) -> MTLRenderPipelineState? {
             let desc = MTLRenderPipelineDescriptor()
             desc.vertexFunction = library.makeFunction(name: vertex)
             desc.fragmentFunction = library.makeFunction(name: fragment)
@@ -98,12 +101,18 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
             desc.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
             desc.colorAttachments[0].sourceAlphaBlendFactor = .one
             desc.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
-            return try! device.makeRenderPipelineState(descriptor: desc)
+            return try? device.makeRenderPipelineState(descriptor: desc)
         }
 
-        self.bgPipeline = makePipeline(vertex: "bg_vert", fragment: "bg_frag")
-        self.glyphPipeline = makePipeline(vertex: "glyph_vert", fragment: "glyph_frag")
-        self.cursorPipeline = makePipeline(vertex: "cursor_vert", fragment: "cursor_frag")
+        guard let bg = makePipeline(vertex: "bg_vert", fragment: "bg_frag"),
+              let glyph = makePipeline(vertex: "glyph_vert", fragment: "glyph_frag"),
+              let cursor = makePipeline(vertex: "cursor_vert", fragment: "cursor_frag") else {
+            FileHandle.standardError.write("[Cosmodrome] Failed to create render pipelines\n".data(using: .utf8)!)
+            return nil
+        }
+        self.bgPipeline = bg
+        self.glyphPipeline = glyph
+        self.cursorPipeline = cursor
 
         super.init()
 
@@ -139,6 +148,17 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
+    /// Per-session vertex range for scissor-isolated drawing.
+    private struct DrawRange {
+        let scissor: MTLScissorRect
+        let bgStart: Int
+        var bgCount: Int
+        let glyphStart: Int
+        var glyphCount: Int
+        let cursorStart: Int
+        var cursorCount: Int
+    }
+
     func draw(in view: MTKView) {
         guard let drawable = view.currentDrawable,
               let passDescriptor = view.currentRenderPassDescriptor else { return }
@@ -173,6 +193,8 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
         let glyphBase = maxVertices / 3
         let cursorBase = 2 * maxVertices / 3
 
+        var drawRanges: [DrawRange] = []
+
         for entry in visibleSessions {
             let backend = entry.backend
             let cellW = Float(fontManager.cellMetrics.width)
@@ -181,6 +203,11 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
 
             let offsetX = Float(entry.viewport.originX)
             let offsetY = Float(entry.viewport.originY)
+
+            // Track per-session vertex offsets for scissor-rect drawing
+            let sessionBgStart = bgCount
+            let sessionGlyphStart = glyphCount
+            let sessionCursorStart = cursorCount
 
             // Hold the backend lock for the entire read pass — prevents the I/O
             // thread from mutating SwiftTerm's internal buffers while we read cells.
@@ -233,9 +260,10 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
                     // block elements tile seamlessly (no gaps from font metrics mismatch).
                     if cp >= 0x2580 && cp <= 0x259F {
                         let rects = blockElementRects(cp, cellW: cellW, cellH: cellH)
+                        var blockOverflow = false
                         for rect in rects {
                             let idx = bgBase + bgCount
-                            guard idx + 6 <= glyphBase else { break }
+                            guard idx + 6 <= glyphBase else { blockOverflow = true; break }
                             addQuad(
                                 ptr: vertexPtr, at: idx,
                                 x: x + rect.x, y: y + rect.y,
@@ -245,6 +273,7 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
                             )
                             bgCount += 6
                         }
+                        if blockOverflow { break }
                         continue
                     }
 
@@ -309,6 +338,17 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
 
             backend.clearDirty()
             backend.unlock()
+
+            // Record per-session draw range for scissor-isolated rendering
+            drawRanges.append(DrawRange(
+                scissor: entry.scissor,
+                bgStart: bgBase + sessionBgStart,
+                bgCount: bgCount - sessionBgStart,
+                glyphStart: glyphBase + sessionGlyphStart,
+                glyphCount: glyphCount - sessionGlyphStart,
+                cursorStart: cursorBase + sessionCursorStart,
+                cursorCount: cursorCount - sessionCursorStart
+            ))
         }
 
         // Encode
@@ -329,25 +369,31 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
         encoder.setVertexBuffer(buffer, offset: 0, index: 0)
         encoder.setVertexBuffer(uniformsBuffer, offset: 0, index: 1)
 
-        // Draw backgrounds
-        if bgCount > 0 {
-            encoder.setRenderPipelineState(bgPipeline)
-            encoder.drawPrimitives(type: .triangle, vertexStart: bgBase, vertexCount: bgCount)
+        let drawableW = Int(view.drawableSize.width)
+        let drawableH = Int(view.drawableSize.height)
+
+        // Draw backgrounds (per-session with scissor rects)
+        encoder.setRenderPipelineState(bgPipeline)
+        for range in drawRanges where range.bgCount > 0 {
+            encoder.setScissorRect(clampedScissor(range.scissor, drawableW: drawableW, drawableH: drawableH))
+            encoder.drawPrimitives(type: .triangle, vertexStart: range.bgStart, vertexCount: range.bgCount)
         }
 
-        // Draw glyphs
-        if glyphCount > 0 {
-            encoder.setRenderPipelineState(glyphPipeline)
-            if let tex = atlas.currentTexture {
-                encoder.setFragmentTexture(tex, index: 0)
-            }
-            encoder.drawPrimitives(type: .triangle, vertexStart: glyphBase, vertexCount: glyphCount)
+        // Draw glyphs (per-session with scissor rects)
+        encoder.setRenderPipelineState(glyphPipeline)
+        if let tex = atlas.currentTexture {
+            encoder.setFragmentTexture(tex, index: 0)
+        }
+        for range in drawRanges where range.glyphCount > 0 {
+            encoder.setScissorRect(clampedScissor(range.scissor, drawableW: drawableW, drawableH: drawableH))
+            encoder.drawPrimitives(type: .triangle, vertexStart: range.glyphStart, vertexCount: range.glyphCount)
         }
 
-        // Draw cursors
-        if cursorCount > 0 {
-            encoder.setRenderPipelineState(cursorPipeline)
-            encoder.drawPrimitives(type: .triangle, vertexStart: cursorBase, vertexCount: cursorCount)
+        // Draw cursors (per-session with scissor rects)
+        encoder.setRenderPipelineState(cursorPipeline)
+        for range in drawRanges where range.cursorCount > 0 {
+            encoder.setScissorRect(clampedScissor(range.scissor, drawableW: drawableW, drawableH: drawableH))
+            encoder.drawPrimitives(type: .triangle, vertexStart: range.cursorStart, vertexCount: range.cursorCount)
         }
 
         encoder.endEncoding()
@@ -371,6 +417,15 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
         p[3] = TerminalVertex(position: SIMD2(x + w, y), texCoord: SIMD2(u1, v0), color: color)
         p[4] = TerminalVertex(position: SIMD2(x + w, y + h), texCoord: SIMD2(u1, v1), color: color)
         p[5] = TerminalVertex(position: SIMD2(x, y + h), texCoord: SIMD2(u0, v1), color: color)
+    }
+
+    /// Clamp a scissor rect to the drawable bounds to prevent Metal validation errors.
+    private func clampedScissor(_ scissor: MTLScissorRect, drawableW: Int, drawableH: Int) -> MTLScissorRect {
+        let x = min(scissor.x, max(drawableW, 1) - 1)
+        let y = min(scissor.y, max(drawableH, 1) - 1)
+        let w = min(scissor.width, drawableW - x)
+        let h = min(scissor.height, drawableH - y)
+        return MTLScissorRect(x: x, y: y, width: max(w, 1), height: max(h, 1))
     }
 
     // MARK: - Block Element Rendering
@@ -490,7 +545,9 @@ final class TerminalRenderer: NSObject, MTKViewDelegate {
                 let b = Float(i % 6) / 5.0
                 return SIMD4<Float>(r, g, b, 1.0)
             } else {
-                let gray = Float(Int(idx) - 232) / 23.0
+                // xterm 256-color grayscale ramp: indices 232-255 map to
+                // RGB values 8, 18, 28, ..., 238 (i.e., 8 + 10 * (idx - 232))
+                let gray = Float(8 + 10 * (Int(idx) - 232)) / 255.0
                 return SIMD4<Float>(gray, gray, gray, 1.0)
             }
         case .rgb(let r, let g, let b):

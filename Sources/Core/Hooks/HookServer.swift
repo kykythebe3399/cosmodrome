@@ -120,8 +120,11 @@ public final class HookServer {
             let n = read(clientFD, buf, bufSize)
             if n > 0 {
                 data.append(buf, count: n)
+            } else if n == 0 {
+                break // EOF
             } else {
-                break
+                if errno == EINTR { continue }
+                break // real error
             }
         }
         close(clientFD)
