@@ -224,6 +224,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
 
         // Command palette overlay — positioned over terminal content area only
         let overlay = NSHostingView(rootView: CommandPaletteView(state: paletteState))
+        overlay.wantsLayer = true
+        overlay.layer?.zPosition = 100  // Above session header/label layers (zPosition 11-13)
         overlay.frame = terminalContentView.bounds
         overlay.autoresizingMask = [.width, .height]
         overlay.isHidden = true
@@ -611,19 +613,43 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             self?.terminalContentView.toggleFocus()
         })
 
+        // Built-in themes
+        let activeThemeName = customTheme?.name ?? (isDarkTheme ? "Dark" : "Light")
         actions.append(PaletteAction(
-            "Dark Mode",
-            subtitle: isDarkTheme ? "Switch to light" : "Switch to dark",
-            icon: isDarkTheme ? "moon.fill" : "sun.max.fill",
-            category: "Views",
-            isToggle: true,
-            toggleState: isDarkTheme
+            "Theme: Dark",
+            subtitle: activeThemeName == "Dark" ? "Active" : nil,
+            icon: "moon.fill",
+            category: "Themes"
         ) { [weak self] in
             guard let self else { return }
             self.customTheme = nil
-            self.isDarkTheme.toggle()
-            self.applyTheme(self.isDarkTheme ? .dark : .light)
+            self.isDarkTheme = true
+            self.applyTheme(.dark)
         })
+        actions.append(PaletteAction(
+            "Theme: Light",
+            subtitle: activeThemeName == "Light" ? "Active" : nil,
+            icon: "sun.max.fill",
+            category: "Themes"
+        ) { [weak self] in
+            guard let self else { return }
+            self.customTheme = nil
+            self.isDarkTheme = false
+            self.applyTheme(.light)
+        })
+        // Custom themes from bundle and user directory
+        for (name, theme) in Self.availableCustomThemes() {
+            actions.append(PaletteAction(
+                "Theme: \(name)",
+                subtitle: activeThemeName == name ? "Active" : nil,
+                icon: "paintpalette",
+                category: "Themes"
+            ) { [weak self] in
+                guard let self else { return }
+                self.customTheme = theme
+                self.applyTheme(theme)
+            })
+        }
 
         // --- Sessions ---
         if let project = projectStore.activeProject {
@@ -796,6 +822,42 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         }
 
         return nil
+    }
+
+    /// Discover custom themes from bundled Resources/Themes/ and ~/.config/cosmodrome/themes/.
+    /// Returns (displayName, Theme) pairs, excluding built-in dark/light.
+    private static func availableCustomThemes() -> [(String, Theme)] {
+        var results: [(String, Theme)] = []
+        let parser = ConfigParser()
+
+        // Bundled themes
+        if let themesURL = Bundle.main.url(forResource: "Themes", withExtension: nil) ?? Bundle.main.resourceURL?.appendingPathComponent("Themes"),
+           let files = try? FileManager.default.contentsOfDirectory(atPath: themesURL.path) {
+            for file in files.sorted() where file.hasSuffix(".yml") {
+                let name = String(file.dropLast(4))  // remove .yml
+                if name == "dark" || name == "light" { continue }
+                let path = themesURL.appendingPathComponent(file).path
+                if let theme = try? parser.parseTheme(at: path) {
+                    results.append((theme.name, theme))
+                }
+            }
+        }
+
+        // User themes from ~/.config/cosmodrome/themes/
+        let userDir = NSString(string: "~/.config/cosmodrome/themes").expandingTildeInPath
+        if let files = try? FileManager.default.contentsOfDirectory(atPath: userDir) {
+            for file in files.sorted() where file.hasSuffix(".yml") {
+                let path = (userDir as NSString).appendingPathComponent(file)
+                if let theme = try? parser.parseTheme(at: path) {
+                    // Skip if already added from bundle with same name
+                    if !results.contains(where: { $0.0 == theme.name }) {
+                        results.append((theme.name, theme))
+                    }
+                }
+            }
+        }
+
+        return results
     }
 
     private func observeAppearanceChanges() {

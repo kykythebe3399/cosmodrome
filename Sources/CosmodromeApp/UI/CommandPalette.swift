@@ -46,7 +46,7 @@ final class CommandPaletteState {
     private static let maxRecents = 5
 
     /// Preferred category display order. Categories not listed here appear at the end.
-    private static let categoryOrder = ["Attention", "Sessions", "Projects", "Views", "Dev Servers"]
+    private static let categoryOrder = ["Attention", "Sessions", "Projects", "Views", "Themes", "Dev Servers"]
 
     /// All displayable items: grouped by category (when query is empty) or flat fuzzy-matched results.
     var filteredActions: [PaletteAction] {

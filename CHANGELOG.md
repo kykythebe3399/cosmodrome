@@ -4,6 +4,42 @@ All notable changes to Cosmodrome are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-03-15
+
+### Added
+
+#### Intelligence Layer
+- **Event persistence** -- SQLite-backed storage (`EventStore`, `SQLiteStore`, `EventPersister`) at `~/Library/Application Support/Cosmodrome/cosmodrome.db`. Persists all agent activity, session history, tasks, cost data, error patterns, and workflow sequences. Async batch flushing to avoid blocking I/O.
+- **Cost prediction** -- `CostPredictor` estimates task cost (median + p75) based on historical similar tasks, keyed by classification and file count. Zero LLM, purely statistical.
+- **Efficiency tracking** -- `EfficiencyTracker` compares agent performance across task types (refactor, feature, bugfix, test, docs). Shows which agent is best for which task type.
+- **Task classification** -- `TaskClassifier` heuristically classifies tasks into 6 types based on event patterns (files changed, test presence, errors, commands).
+- **Workflow mining** -- `WorkflowMiner` detects workflow bigrams from historical sequences and suggests next actions with probability scores (e.g., "after editing auth/, you run tests 85% of the time").
+- **Pattern learning** -- `PatternLearner` learns which error patterns historically lead to stuck loops. Predicts stuck probability for new errors.
+- **Urgency scoring** -- `UrgencyScorer` scores sessions 0-100 based on state, stuck info, and time in state. Returns urgency level + reason for UI prioritization.
+
+#### CosmodromeDaemon
+- **Headless daemon** -- `CosmodromeDaemon` runs without UI, ingests Claude Code hook events, persists to EventStore, and serves intelligence queries over Unix sockets. Two socket interfaces: hook socket for event ingestion, control socket for CLI queries (`status`, `query-history`, `query-patterns`, `query-cost`, `query-efficiency`, `query-workflows`). Automatic cleanup of old data.
+
+#### UI/UX Overhaul
+- **Design system** -- `DesignSystem.swift` centralizes spacing, border radii, typography scale, semantic colors, animation speeds, and reusable modifiers. `ThemeState` (@Observable singleton) resolves theme colors with derived surfaces.
+- **Session thumbnails redesigned** -- Left border accent strip (3px, state color) as primary indicator. Unread dot for non-focused sessions. Notification badge. Cleaner content hierarchy with session index.
+- **Activity log smart filtering** -- Default "Smart" filter excludes noise (state transitions), focuses on meaningful events. "While You Were Away" banner shows summary after 5min+ absence. Time filters (Last Hour / Today / All) and event filters (Smart / Files / Commands / Errors / All).
+- **Status bar fleet summary** -- Distinct shapes + colors for accessibility: filled circle (working), half-circle (needs input), triangle (error). Total session count + fleet cost.
+- **Sidebar restructured** -- Collapsible project sections, cleaner spacing, session context menu (Focus, Restart, Close).
+- **Terminal content improvements** -- Grid gap (4px), cell corner radius (6px), session header overlay (24px), session border/label CALayers. Focus tracking with hover states + session dimming.
+- **Command palette themes** -- Individual theme entries (Dark, Light, custom) with active indicator. Themes category in palette. Overlay z-position fix for visibility above session headers.
+
+#### Themes
+- **Custom theme support** -- YAML-based custom themes loaded from `Resources/Themes/` and `~/.config/cosmodrome/themes/`. Luminance-based dark/light detection.
+- **Daobeam theme** -- New bundled light theme (beige background, dark foreground).
+
+### Fixed
+- **Git branch visibility** -- Correctly detected and displayed in sidebar.
+- **Phantom scroll after focus change** -- 150ms scroll suppression guard after session focus change prevents erratic jumping (same root cause as Ghostty #11276).
+- **Smooth scrolling** -- Sub-line precision with accumulator carrying remainder between events.
+- **Notification sound removed** -- Was causing UX friction; notifications are now silent.
+- **Context menu labels** -- Renamed for clarity.
+
 ## [0.2.0] - 2026-03-14
 
 ### Added
