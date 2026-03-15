@@ -28,12 +28,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     private var activityLogSidebarHost: NSHostingView<AnyView>?
     private var activityLogExpanded = false
     private let userConfig: UserConfig?
+    private var eventStore: EventStore?
+    private var eventPersister: EventPersister?
 
     /// User's preferred shell from $SHELL, falling back to /bin/zsh.
     private static let defaultShell: String = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
 
     init() {
         self.userConfig = Self.loadUserConfig()
+        UserConfig.current = self.userConfig
         // Clear any saved frame from previous broken runs
         NSWindow.removeFrame(usingName: "CosmodromeMain")
 
@@ -54,6 +57,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
 
         sessionManager = SessionManager(projectStore: projectStore)
         keybindingManager = KeybindingManager()
+        setupPersistence()
         setupUI()
         setupMCP()
         setupHookServer()
@@ -329,6 +333,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             createDefaultProject()
         }
 
+        wireActivityLogPersistence()
         refreshTerminalView()
         window?.makeFirstResponder(terminalContentView)
     }
@@ -410,6 +415,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
             )
             projectStore.addProject(project)
             projectStore.setActiveProject(id: project.id)
+            self.wireActivityLogPersistence()
 
             do {
                 try self.sessionManager.startSession(session)
@@ -446,6 +452,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
                 sessions: [session]
             )
             projectStore.addProject(project)
+            wireActivityLogPersistence()
             do { try sessionManager.startSession(session) } catch {}
             refreshTerminalView()
         }
@@ -1338,6 +1345,45 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
         self.mcpBridge = bridge
     }
 
+    private func setupPersistence() {
+        do {
+            let store = try EventStore.defaultStore()
+            let persister = EventPersister(store: store)
+            self.eventStore = store
+            self.eventPersister = persister
+            sessionManager.eventStore = store
+            sessionManager.eventPersister = persister
+            sessionManager.patternLearner = PatternLearner(store: store)
+            sessionManager.costPredictor = CostPredictor(store: store)
+            sessionManager.workflowMiner = WorkflowMiner(store: store)
+
+            // Wire activity log persistence for all projects
+            wireActivityLogPersistence()
+
+            // Schedule daily cleanup
+            let cleanupTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+            cleanupTimer.schedule(deadline: .now() + 3600, repeating: 86400)
+            cleanupTimer.setEventHandler { [weak store] in
+                let retentionDays = UserConfig.current?.storageRetentionDays ?? 90
+                try? store?.cleanup(eventRetentionDays: retentionDays)
+            }
+            cleanupTimer.resume()
+        } catch {
+            // Persistence is optional — app works fine without it
+            NSLog("Cosmodrome: failed to initialize event persistence: \(error)")
+        }
+    }
+
+    /// Wire onEventsAppended for all project activity logs to the persister.
+    private func wireActivityLogPersistence() {
+        guard let persister = eventPersister else { return }
+        for project in projectStore.projects {
+            project.activityLog.onEventsAppended = { [weak persister] events in
+                persister?.buffer(events: events)
+            }
+        }
+    }
+
     private func setupHookServer() {
         let server = HookServer()
         let socketPath = server.start()
@@ -1659,6 +1705,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSSplitV
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Flush all buffered events to SQLite before shutdown
+        eventPersister?.flushSync()
         saveState()
         for project in projectStore.projects {
             for session in project.sessions {

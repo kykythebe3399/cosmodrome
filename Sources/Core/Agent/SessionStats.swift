@@ -159,6 +159,23 @@ public final class SessionStats {
 
         lock.unlock()
     }
+
+    // MARK: - Snapshot for persistence
+
+    /// Thread-safe snapshot of all stats for persistence to SQLite.
+    public func snapshot() -> SessionStatsSnapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return SessionStatsSnapshot(
+            totalCost: _totalCost,
+            totalTasks: _totalTasks,
+            totalErrors: _totalErrors,
+            totalFilesChanged: _totalFilesChanged,
+            totalCommands: _totalCommands,
+            totalSubagents: _totalSubagents,
+            totalIdleTime: _totalIdleTime
+        )
+    }
 }
 
 // MARK: - Formatting helpers

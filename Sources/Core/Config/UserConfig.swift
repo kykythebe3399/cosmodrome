@@ -68,17 +68,28 @@ public struct UserConfig: Codable {
     public var theme: String?
     public var window: WindowConfig?
     public var notifications: NotificationConfig?
+    public var storage: StorageConfig?
+
+    /// Set by the app at startup for global access (e.g., cleanup timer).
+    public static var current: UserConfig?
+
+    /// Storage retention in days, with default.
+    public var storageRetentionDays: Int {
+        storage?.retentionDays ?? 90
+    }
 
     public init(
         font: FontConfig? = nil,
         theme: String? = nil,
         window: WindowConfig? = nil,
-        notifications: NotificationConfig? = nil
+        notifications: NotificationConfig? = nil,
+        storage: StorageConfig? = nil
     ) {
         self.font = font
         self.theme = theme
         self.window = window
         self.notifications = notifications
+        self.storage = storage
     }
 
     public struct FontConfig: Codable {
@@ -105,6 +116,21 @@ public struct UserConfig: Codable {
         public init(opacity: Double? = nil, restoreState: Bool? = nil) {
             self.opacity = opacity
             self.restoreState = restoreState
+        }
+    }
+
+    public struct StorageConfig: Codable {
+        public var enabled: Bool?
+        public var retentionDays: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case enabled
+            case retentionDays = "retention_days"
+        }
+
+        public init(enabled: Bool? = nil, retentionDays: Int? = nil) {
+            self.enabled = enabled
+            self.retentionDays = retentionDays
         }
     }
 

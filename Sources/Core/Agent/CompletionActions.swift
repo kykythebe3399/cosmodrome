@@ -24,6 +24,8 @@ public struct CompletionActions {
         public let events: [ActivityEvent]
         public let narrative: SessionNarrative.Summary?
         public let stuckInfo: StuckDetector.StuckInfo?
+        public let workflowSuggestions: [WorkflowMiner.Suggestion]
+        public let costPrediction: CostPredictor.Prediction?
 
         public init(
             filesChanged: [String],
@@ -32,7 +34,9 @@ public struct CompletionActions {
             stats: SessionStats,
             events: [ActivityEvent],
             narrative: SessionNarrative.Summary?,
-            stuckInfo: StuckDetector.StuckInfo?
+            stuckInfo: StuckDetector.StuckInfo?,
+            workflowSuggestions: [WorkflowMiner.Suggestion] = [],
+            costPrediction: CostPredictor.Prediction? = nil
         ) {
             self.filesChanged = filesChanged
             self.taskDuration = taskDuration
@@ -41,6 +45,8 @@ public struct CompletionActions {
             self.events = events
             self.narrative = narrative
             self.stuckInfo = stuckInfo
+            self.workflowSuggestions = workflowSuggestions
+            self.costPrediction = costPrediction
         }
     }
 
@@ -101,6 +107,20 @@ public struct CompletionActions {
             ))
         }
 
+        // Append workflow-mined suggestions (learned from historical patterns)
+        for suggestion in context.workflowSuggestions {
+            // Don't duplicate existing actions
+            let existingIds = Set(actions.map(\.id))
+            let suggestedId = "workflow_\(suggestion.action.lowercased().replacingOccurrences(of: " ", with: "_"))"
+            guard !existingIds.contains(suggestedId) else { continue }
+
+            actions.append(Action(
+                label: suggestion.label,
+                icon: "clock.arrow.circlepath",
+                id: suggestedId
+            ))
+        }
+
         return actions
     }
 
@@ -134,7 +154,12 @@ public struct CompletionActions {
 
         let cost = context.stats.totalCost
         if cost > 0 {
-            statParts.append(SessionStats.formatCost(cost))
+            var costStr = SessionStats.formatCost(cost)
+            // Compare actual vs predicted cost
+            if let prediction = context.costPrediction, prediction.median > 0.01 {
+                costStr += " (vs typical \(prediction.rangeString))"
+            }
+            statParts.append(costStr)
         }
 
         if !statParts.isEmpty {

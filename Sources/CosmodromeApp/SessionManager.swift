@@ -34,6 +34,14 @@ final class SessionManager {
     /// Socket path for the hook server — injected into spawned sessions' environment.
     var hookSocketPath: String?
 
+    /// Persistence layer for events and stats. Injected by MainWindowController.
+    var eventStore: EventStore?
+    var eventPersister: EventPersister?
+    /// Intelligence modules — initialized when eventStore is set.
+    var patternLearner: PatternLearner?
+    var costPredictor: CostPredictor?
+    var workflowMiner: WorkflowMiner?
+
     /// Called on main thread when an agent completes a task (working → not working).
     /// Parameters: session, completionContext
     var onTaskCompleted: ((Session, CompletionActions.CompletionContext) -> Void)?
@@ -232,11 +240,26 @@ final class SessionManager {
 
                                 // Trigger completion actions
                                 let events: [ActivityEvent]
+                                let projectPath: String?
                                 if let project = self?.findProject(for: session) {
                                     events = project.activityLog.events(for: session.id)
+                                    projectPath = project.rootPath
                                 } else {
                                     events = []
+                                    projectPath = nil
                                 }
+
+                                // Get workflow suggestions from historical patterns
+                                let wfSuggestions: [WorkflowMiner.Suggestion]
+                                if let miner = self?.workflowMiner, let lastEvent = events.last {
+                                    wfSuggestions = miner.suggest(afterEvent: lastEvent, projectPath: projectPath)
+                                } else {
+                                    wfSuggestions = []
+                                }
+
+                                // Get cost prediction
+                                let costPrediction = self?.costPredictor?.predictFromEvents(events, projectPath: projectPath)
+
                                 let ctx = CompletionActions.CompletionContext(
                                     filesChanged: files,
                                     taskDuration: duration,
@@ -244,9 +267,24 @@ final class SessionManager {
                                     stats: session.stats,
                                     events: events,
                                     narrative: session.narrative,
-                                    stuckInfo: session.stuckInfo
+                                    stuckInfo: session.stuckInfo,
+                                    workflowSuggestions: wfSuggestions,
+                                    costPrediction: costPrediction
                                 )
                                 self?.onTaskCompleted?(session, ctx)
+
+                                // Record error pattern outcome (for PatternLearner)
+                                if let learner = self?.patternLearner {
+                                    let errorMsgs = events.compactMap { e -> String? in
+                                        if case .error(let msg) = e.kind { return msg }
+                                        return nil
+                                    }
+                                    let wasStuck = session.stuckInfo != nil
+                                    for msg in errorMsgs {
+                                        learner.recordOutcome(errorMessage: msg, ledToStuck: wasStuck,
+                                                              resolutionTime: duration)
+                                    }
+                                }
                             }
 
                             // Mark session as needing attention + send macOS notification
@@ -296,6 +334,17 @@ final class SessionManager {
                 sessionName: session.name,
                 kind: .taskStarted
             ))
+        }
+
+        // Persist session start to SQLite
+        if let eventStore, let project = findProject(for: session) {
+            try? eventStore.recordSessionStart(
+                sessionId: session.id,
+                projectId: project.id.uuidString,
+                projectPath: session.cwd,
+                name: session.name,
+                agentType: session.agentType
+            )
         }
 
         // Inject minimal shell integration for OSC 133 (command tracking)
@@ -620,11 +669,23 @@ final class SessionManager {
                                     ))
                                 }
                                 let events2: [ActivityEvent]
+                                let projPath2: String?
                                 if let project = self?.findProject(for: session) {
                                     events2 = project.activityLog.events(for: session.id)
+                                    projPath2 = project.rootPath
                                 } else {
                                     events2 = []
+                                    projPath2 = nil
                                 }
+
+                                let wfSuggestions2: [WorkflowMiner.Suggestion]
+                                if let miner = self?.workflowMiner, let lastEvent = events2.last {
+                                    wfSuggestions2 = miner.suggest(afterEvent: lastEvent, projectPath: projPath2)
+                                } else {
+                                    wfSuggestions2 = []
+                                }
+                                let costPred2 = self?.costPredictor?.predictFromEvents(events2, projectPath: projPath2)
+
                                 let ctx = CompletionActions.CompletionContext(
                                     filesChanged: files,
                                     taskDuration: duration,
@@ -632,7 +693,9 @@ final class SessionManager {
                                     stats: session.stats,
                                     events: events2,
                                     narrative: session.narrative,
-                                    stuckInfo: session.stuckInfo
+                                    stuckInfo: session.stuckInfo,
+                                    workflowSuggestions: wfSuggestions2,
+                                    costPrediction: costPred2
                                 )
                                 self?.onTaskCompleted?(session, ctx)
                             }
@@ -890,7 +953,11 @@ final class SessionManager {
         }
 
         // Run stuck detection
-        let stuckInfo = StuckDetector.detect(events: events, currentState: session.agentState)
+        let stuckInfo = StuckDetector.detectWithHistory(
+            events: events,
+            currentState: session.agentState,
+            patternLearner: patternLearner
+        )
         session.stuckInfo = stuckInfo
 
         // Generate narrative
@@ -1142,6 +1209,14 @@ final class SessionManager {
                 sessionName: session.name,
                 kind: .taskCompleted(duration: 0)
             ))
+        }
+
+        // Persist session end with final stats
+        if let eventStore {
+            try? eventStore.recordSessionEnd(
+                sessionId: session.id,
+                stats: session.stats.snapshot()
+            )
         }
 
         // Stop recording if active

@@ -36,6 +36,10 @@ public final class ActivityLog {
     private let lock = NSLock()
     private let maxEvents = 10_000
 
+    /// Called after events are appended. Used by EventPersister to buffer events for SQLite.
+    /// Called under lock — must be fast (sub-microsecond).
+    public var onEventsAppended: (([ActivityEvent]) -> Void)?
+
     public init() {}
 
     /// Append an event. Called from I/O thread, must be fast.
@@ -45,7 +49,9 @@ public final class ActivityLog {
         if _events.count > maxEvents {
             _events.removeFirst(_events.count - maxEvents)
         }
+        let callback = onEventsAppended
         lock.unlock()
+        callback?([event])
     }
 
     /// Append multiple events at once.
@@ -56,7 +62,9 @@ public final class ActivityLog {
         if _events.count > maxEvents {
             _events.removeFirst(_events.count - maxEvents)
         }
+        let callback = onEventsAppended
         lock.unlock()
+        callback?(events)
     }
 
     /// Snapshot of all events. Safe from any thread.

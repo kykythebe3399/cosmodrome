@@ -16,11 +16,15 @@ public enum StuckDetector {
         public let duration: TimeInterval
         /// Short description of the repeating pattern (e.g. "compile error").
         public let pattern: String?
+        /// True if this stuck was predicted from historical patterns before reaching 3 retries.
+        public let predictedFromHistory: Bool
 
-        public init(retryCount: Int, duration: TimeInterval, pattern: String?) {
+        public init(retryCount: Int, duration: TimeInterval, pattern: String?,
+                    predictedFromHistory: Bool = false) {
             self.retryCount = retryCount
             self.duration = duration
             self.pattern = pattern
+            self.predictedFromHistory = predictedFromHistory
         }
     }
 
@@ -68,6 +72,52 @@ public enum StuckDetector {
             retryCount: errorToWorkingCycles,
             duration: duration,
             pattern: pattern
+        )
+    }
+
+    /// Detect stuck with historical pattern data for proactive prediction.
+    /// Can alert at cycle 1 if the error pattern historically leads to stuck.
+    public static func detectWithHistory(
+        events: [ActivityEvent],
+        currentState: AgentState,
+        patternLearner: PatternLearner?
+    ) -> StuckInfo? {
+        // First try standard detection
+        if let standard = detect(events: events, currentState: currentState) {
+            return standard
+        }
+
+        // If no standard stuck but we have a pattern learner, check for proactive prediction
+        guard let learner = patternLearner,
+              currentState == .working || currentState == .error else { return nil }
+
+        let cutoff = Date().addingTimeInterval(-lookbackWindow)
+        let recentErrors = events.filter { $0.timestamp > cutoff && isErrorEvent($0) }
+
+        // Need at least 1 error to predict
+        guard let lastError = recentErrors.last else { return nil }
+
+        // Extract the error message
+        let errorMsg: String?
+        switch lastError.kind {
+        case .error(let msg): errorMsg = msg
+        case .commandCompleted(let cmd, _, _): errorMsg = cmd
+        default: errorMsg = nil
+        }
+
+        guard let msg = errorMsg,
+              let prediction = learner.predict(errorMessage: msg),
+              prediction.isHighRisk else { return nil }
+
+        // Proactive stuck detection: alert even with < 3 retries
+        guard let firstError = recentErrors.first?.timestamp else { return nil }
+        let duration = Date().timeIntervalSince(firstError)
+
+        return StuckInfo(
+            retryCount: recentErrors.count,
+            duration: duration,
+            pattern: prediction.patternText,
+            predictedFromHistory: true
         )
     }
 
