@@ -64,7 +64,7 @@ public final class PatternLearner {
 
     /// Normalize an error message to a hash key for pattern matching.
     /// Takes first 3 words after lowercasing and stripping file paths and line numbers.
-    static func normalizeError(_ message: String) -> String {
+    public static func normalizeError(_ message: String) -> String {
         var cleaned = message.lowercased()
 
         // Strip file paths (anything like /foo/bar/baz.ext or ./foo/bar)
